@@ -3,6 +3,9 @@ import { useState, useEffect } from 'react';
 import { Camera, Check, X, Loader2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { getAuth } from 'firebase/auth';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
+import { useAuthStore } from '../../stores/authStore';
 import toast from 'react-hot-toast';
 
 export default function ProfileSetupPage() {
@@ -66,31 +69,79 @@ export default function ProfileSetupPage() {
         if (!isFormValid) return;
         setLoading(true);
 
-        try {
-            const colors = ['#C0392B', '#E67E22', '#F1C40F', '#27AE60', '#2980B9', '#8E44AD'];
-            const randomColor = colors[Math.floor(Math.random() * colors.length)];
+        const colors = ['#C0392B', '#E67E22', '#F1C40F', '#27AE60', '#2980B9', '#8E44AD'];
+        const randomColor = colors[Math.floor(Math.random() * colors.length)];
+        const fullPhone = `${countryCode}${phone}`;
+        const currentUser = getAuth().currentUser;
 
-            const profileData = {
+        const profileData = {
+            name,
+            username,
+            phone: fullPhone,
+            avatarColor: randomColor,
+        };
+
+        let profileSaved = false;
+
+        // 1. Primary: Save via backend Admin API (sets users and usernames documents)
+        try {
+            await api.post('/auth/profile', profileData);
+            profileSaved = true;
+        } catch (backendErr: any) {
+            console.warn('[ProfileSetup] Backend API call failed, falling back to direct Firestore write:', backendErr);
+        }
+
+        // 2. Fallback: Save directly to Firestore users/{uid}
+        if (!profileSaved && currentUser) {
+            try {
+                await setDoc(doc(db, 'users', currentUser.uid), {
+                    uid: currentUser.uid,
+                    email: currentUser.email || '',
+                    name,
+                    username,
+                    phone: fullPhone,
+                    phoneNumber: fullPhone,
+                    avatarColor: randomColor,
+                    createdAt: serverTimestamp(),
+                }, { merge: true });
+                profileSaved = true;
+            } catch (firestoreErr) {
+                console.error('[ProfileSetup] Direct Firestore save error:', firestoreErr);
+            }
+        }
+
+        if (!profileSaved) {
+            toast.error('Failed to save profile. Please check your network and try again.');
+            setLoading(false);
+            return;
+        }
+
+        // Hydrate local Zustand auth store so the dashboard renders user immediately
+        if (currentUser) {
+            useAuthStore.getState().setProfile({
+                uid: currentUser.uid,
+                email: currentUser.email || '',
                 name,
                 username,
-                phone: `${countryCode}${phone}`,
+                phone: fullPhone,
+                phoneNumber: fullPhone,
                 avatarColor: randomColor,
-            };
+            });
+        }
 
-            await api.post('/auth/profile', profileData);
-
-            if (avatarFile) {
+        // Optional avatar upload
+        if (avatarFile) {
+            try {
                 const fd = new FormData();
                 fd.append('file', avatarFile);
                 await api.postFormData('/auth/avatar', fd);
+            } catch (avatarErr) {
+                console.warn('[ProfileSetup] Avatar upload failed, skipping:', avatarErr);
             }
-
-            window.location.href = '/dashboard';
-        } catch (e: any) {
-            toast.error('Failed to save profile. Please try again.');
-        } finally {
-            setLoading(false);
         }
+
+        toast.success('Profile created successfully!');
+        window.location.href = '/dashboard';
     };
 
     return (
