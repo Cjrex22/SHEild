@@ -17,10 +17,27 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
     const handleAcceptCircleInvite = async (e: React.MouseEvent, item: NotificationItem) => {
         e.stopPropagation();
         try {
-            await api.post(`/circle/${item.fromUid}`);
+            let targetUid = item.fromUid;
+            if (!targetUid && item.fromUsername) {
+                try {
+                    const searchRes = await api.get(`/users/search?q=${item.fromUsername}`);
+                    const matched = searchRes?.find((u: any) => u.username?.toLowerCase() === item.fromUsername.toLowerCase());
+                    if (matched?.uid) targetUid = matched.uid;
+                } catch {}
+            }
+
+            if (!targetUid) {
+                toast.error('Unable to resolve inviter details');
+                return;
+            }
+
+            await api.post(`/circle/${targetUid}`);
             const uid = auth.currentUser?.uid;
             if (uid) {
-                await setDoc(doc(db, 'users', uid, 'guardCircleDetails', item.fromUid), {
+                await setDoc(doc(db, 'users', uid, 'guardCircleDetails', targetUid), {
+                    uid: targetUid,
+                    name: item.fromName || '',
+                    username: item.fromUsername || '',
                     status: 'accepted',
                     accepted: true
                 }, { merge: true }).catch(() => {});
@@ -164,7 +181,7 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                                         </div>
                                     )}
 
-                                    {item.type === 'circle_add' && (
+                                    {(item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'))) && (
                                         <div className="mt-3 flex items-center gap-2 pt-2.5 border-t border-white/5">
                                             {item.accepted ? (
                                                 <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-bold bg-emerald-500/15 px-2.5 py-1 rounded-full border border-emerald-500/30">

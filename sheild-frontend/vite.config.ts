@@ -9,6 +9,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg', 'firebase-messaging-sw.js'],
       workbox: {
+        skipWaiting: true,
+        clientsClaim: true,
         importScripts: ['firebase-messaging-sw.js'],
         navigateFallbackDenylist: [/firebase-messaging-sw\.js/],
         globIgnores: ['firebase-messaging-sw.js']

@@ -42,7 +42,7 @@ function AuthRoute({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
-  const { setUser, setProfile, clearUser } = useAuthStore();
+  const { user, setUser, setProfile, clearUser } = useAuthStore();
   const { shakeOverlayVisible, setShakeOverlayVisible, setSosActive, setSessionId } = useSosStore();
 
   // Shake-to-SOS: single mount point for the entire app
@@ -147,7 +147,6 @@ function App() {
   }, [setUser, setProfile, clearUser]);
 
   useEffect(() => {
-    const { user } = useAuthStore.getState();
     let unsubNotifs: () => void;
 
     if (user) {
@@ -165,7 +164,7 @@ function App() {
     return () => {
       if (unsubNotifs) unsubNotifs();
     };
-  }, [useAuthStore.getState().user]);
+  }, [user]);
 
   return (
     <BrowserRouter>
