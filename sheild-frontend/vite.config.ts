@@ -17,8 +17,8 @@ export default defineConfig({
         name: 'SHEild - Digital Bodyguard',
         short_name: 'SHEild',
         description: 'Women Safety & Emergency Web App',
-        theme_color: '#0F0505',
-        background_color: '#0F0505',
+        theme_color: '#000000',
+        background_color: '#000000',
         display: 'standalone',
         start_url: '/',
         icons: [
@@ -36,5 +36,9 @@ export default defineConfig({
         ]
       }
     })
-  ]
+  ],
+  server: {
+    host: true,
+    cors: true
+  }
 });

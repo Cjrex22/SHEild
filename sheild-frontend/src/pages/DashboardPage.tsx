@@ -3,7 +3,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useSosStore } from '../stores/sosStore';
 import { useNotificationStore } from '../stores/notificationStore';
 import { api } from '../lib/api';
-import { Shield, Bell, MapPin, ShieldCheck, Phone, Smartphone, Info } from 'lucide-react';
+import { Shield, Bell, MapPin, ShieldCheck, Phone, Smartphone } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 
@@ -12,6 +12,7 @@ import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import NotificationPanel from '../components/NotificationPanel';
 import QuickDialModal from '../components/QuickDialModal';
 import { registerFcmToken, setupForegroundNotifications } from '../lib/fcm';
+import { formatLocationName } from '../lib/locationHelper';
 
 export default function DashboardPage() {
     const navigate = useNavigate();
@@ -19,7 +20,6 @@ export default function DashboardPage() {
     const { unreadCount } = useNotificationStore();
     const { sosActive, bodyguardActive, setSosActive, setBodyguardActive, setSessionId, setAutoCallPolice, setPoliceNumber, shakeToSosEnabled, toggleShakeSos, permissionState } = useSosStore();
 
-    const [bannerDismissed, setBannerDismissed] = useState(false);
     const [locationName, setLocationName] = useState('Locating...');
     const [coords, setCoords] = useState({ lat: 0, lng: 0 });
 
@@ -47,12 +47,16 @@ export default function DashboardPage() {
         let watchId: number;
         if ("geolocation" in navigator) {
             watchId = navigator.geolocation.watchPosition(async (pos) => {
-                setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+                const lat = pos.coords.latitude;
+                const lng = pos.coords.longitude;
+                setCoords({ lat, lng });
                 try {
-                    const res = await api.get(`/geocode/reverse?lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`);
-                    if (res.locationName) setLocationName(res.locationName);
+                    const res = await api.get(`/geocode/reverse?lat=${lat}&lng=${lng}`);
+                    const normalized = formatLocationName(res?.locationName, lat, lng);
+                    setLocationName(normalized);
                 } catch (e) {
-                    setLocationName('Location unavailable');
+                    const fallback = formatLocationName(null, lat, lng);
+                    setLocationName(fallback !== 'Location unavailable' ? fallback : 'Location unavailable');
                 }
             }, () => {
                 setLocationName('Location permission denied');
@@ -206,9 +210,14 @@ export default function DashboardPage() {
                     )}
                 </button>
 
-                <div className="flex items-center gap-2">
-                    <span className="text-xl">🌸</span>
-                    <h1 className="font-display text-xl font-bold text-white tracking-tight">SHEild</h1>
+                <div className="flex items-center gap-2.5">
+                    <img src="/shield-logo.png" alt="SHEild Logo" className="w-9 h-9 object-contain" />
+                    <h1 
+                        className="text-2xl sm:text-[26px] font-extrabold text-white tracking-tight leading-none"
+                        style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"' }}
+                    >
+                        SHEild
+                    </h1>
                 </div>
 
                 <button onClick={() => setIsNotifOpen(true)} className="relative w-9 h-9 flex items-center justify-center text-text-2 hover:text-white transition-colors">
@@ -220,59 +229,6 @@ export default function DashboardPage() {
             </header>
 
             <main className="p-4 flex flex-col gap-6 max-w-md mx-auto">
-                {/* Shake-to-SOS Permission Banner (iOS only) */}
-                {permissionState === 'prompt' && shakeToSosEnabled && !bannerDismissed && (
-                    <div className="shake-banner-enter bg-surface border border-warning/30 rounded-[20px] p-4 shadow-card" style={{ background: 'rgba(245, 158, 11, 0.08)' }}>
-                        <div className="flex items-start gap-3">
-                            <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(245, 158, 11, 0.15)' }}>
-                                <Smartphone size={20} className="text-warning" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <h3 className="text-white font-bold text-sm tracking-tight">Enable Shake-to-SOS</h3>
-                                <p className="text-[11px] text-text-3 mt-0.5 leading-relaxed">Shake your phone 3× rapidly to instantly trigger SOS</p>
-                                <div className="flex gap-2 mt-3">
-                                    <button
-                                        onClick={() => {
-                                            // requestPermission must be called from user gesture on iOS
-                                            if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
-                                                (DeviceMotionEvent as any).requestPermission().then((result: string) => {
-                                                    if (result === 'granted') {
-                                                        useSosStore.getState().setPermissionState('granted');
-                                                        toast.success('Shake-to-SOS enabled!');
-                                                    } else {
-                                                        useSosStore.getState().setPermissionState('denied');
-                                                        toast.error('Motion access denied');
-                                                    }
-                                                }).catch(() => {
-                                                    useSosStore.getState().setPermissionState('denied');
-                                                });
-                                            }
-                                        }}
-                                        className="px-4 py-1.5 text-xs font-bold rounded-full transition-all active:scale-95"
-                                        style={{ background: 'var(--c-warning)', color: '#fff' }}
-                                    >
-                                        Enable
-                                    </button>
-                                    <button
-                                        onClick={() => setBannerDismissed(true)}
-                                        className="px-4 py-1.5 text-xs font-bold text-text-3 rounded-full border border-white/10 hover:bg-white/5 transition-all"
-                                    >
-                                        Not Now
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Denied chip */}
-                {permissionState === 'denied' && (
-                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full self-start" style={{ background: 'rgba(255,255,255,0.06)' }}>
-                        <Info size={12} className="text-text-3" />
-                        <span className="text-[11px] text-text-3">Shake SOS unavailable — motion permission denied</span>
-                    </div>
-                )}
-
                 <div className="bg-surface border border-border rounded-[20px] p-4 shadow-card">
                     <p className="text-[10px] uppercase text-text-3 font-semibold mb-2 tracking-wider">Current Area</p>
                     <div className="flex items-center gap-3">
@@ -298,7 +254,12 @@ export default function DashboardPage() {
                         style={{ background: sosActive ? 'var(--c-danger)' : 'radial-gradient(circle, var(--c-primary-light), var(--c-primary))' }}
                     >
                         {isPressing && !sosActive && <div className="absolute inset-0 rounded-full border-4 border-white/40 animate-ping" />}
-                        <span className="font-display text-[28px] text-white tracking-[4px] ml-1">SOS</span>
+                        <span 
+                            className="font-body text-[32px] font-bold text-white tracking-[2px]"
+                            style={{ fontFamily: 'var(--font-body)' }}
+                        >
+                            SOS
+                        </span>
                     </button>
                     <p className="text-sm text-text-3 mt-8 text-center font-medium">
                         {sosActive ? 'SOS is ACTIVE' : `Hold ${profile?.settings?.holdCountdown || profile?.settings?.sosCountdownSeconds || 3}s to activate`}
@@ -339,37 +300,66 @@ export default function DashboardPage() {
                 {/* Shake-to-SOS Toggle — only if device supports it */}
                 {permissionState !== 'unsupported' && (
                     <div className="bg-surface border border-border rounded-[20px] p-4 shadow-card flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-surface-2 flex items-center justify-center">
-                                <Smartphone size={20} className="text-primary" />
+                        <div 
+                            className="flex items-center gap-3 cursor-pointer group"
+                            onClick={() => {
+                                if (!shakeToSosEnabled) {
+                                    toast('Shake-to-SOS is currently disabled. Turn on the switch to activate it.', { icon: 'ℹ️' });
+                                    return;
+                                }
+                                if (typeof (window as any).simulateShake === 'function') {
+                                    (window as any).simulateShake();
+                                }
+                            }}
+                            title={shakeToSosEnabled ? "Tap to test shake trigger" : "Turn on switch to enable"}
+                        >
+                            <div className="w-10 h-10 rounded-full bg-surface-2 group-hover:bg-primary/20 transition-colors flex items-center justify-center shrink-0">
+                                <Smartphone size={20} className={shakeToSosEnabled ? "text-primary" : "text-text-3"} />
                             </div>
                             <div>
-                                <p className="text-white font-semibold text-sm">Shake to SOS</p>
+                                <div className="flex items-center gap-2">
+                                    <p className="text-white font-semibold text-sm">Shake to SOS</p>
+                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${shakeToSosEnabled ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-surface-3 text-text-3'}`}>
+                                        {shakeToSosEnabled ? 'ACTIVE' : 'OFF'}
+                                    </span>
+                                </div>
                                 <p className="text-[11px] text-text-3">Shake 3× rapidly to trigger SOS</p>
                             </div>
                         </div>
                         <button
-                            onClick={() => {
-                                toggleShakeSos();
-                                // If enabling and on iOS with prompt state, request permission
-                                if (!shakeToSosEnabled && permissionState === 'prompt') {
-                                    if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
-                                        (DeviceMotionEvent as any).requestPermission().then((result: string) => {
+                            onClick={async () => {
+                                const nextState = !shakeToSosEnabled;
+                                if (nextState) {
+                                    // Turning ON
+                                    if (permissionState === 'prompt' && typeof (DeviceMotionEvent as any)?.requestPermission === 'function') {
+                                        try {
+                                            const result = await (DeviceMotionEvent as any).requestPermission();
                                             if (result === 'granted') {
                                                 useSosStore.getState().setPermissionState('granted');
-                                                toast.success('Shake-to-SOS enabled!');
+                                                toggleShakeSos();
+                                                toast.success('Shake-to-SOS activated! Shake 3× to test.', { icon: '📳' });
                                             } else {
                                                 useSosStore.getState().setPermissionState('denied');
+                                                toast.error('Motion sensor permission was denied');
                                             }
-                                        }).catch(() => {
+                                        } catch {
                                             useSosStore.getState().setPermissionState('denied');
-                                        });
+                                            toast.error('Motion permission request failed');
+                                        }
+                                    } else {
+                                        toggleShakeSos();
+                                        toast.success('Shake-to-SOS activated! Shake 3× to test.', { icon: '📳' });
                                     }
+                                } else {
+                                    // Turning OFF
+                                    toggleShakeSos();
+                                    toast('Shake-to-SOS disabled', { icon: '⏸️' });
                                 }
                             }}
                             disabled={permissionState === 'denied'}
                             className={`relative w-12 h-6 rounded-full transition-colors ${shakeToSosEnabled ? 'bg-primary' : 'bg-surface-3'} ${permissionState === 'denied' ? 'opacity-40 cursor-not-allowed' : ''}`}
                             title={permissionState === 'denied' ? 'Enable motion access in browser settings' : undefined}
+                            aria-label="Toggle Shake to SOS"
                         >
                             <div className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${shakeToSosEnabled ? 'translate-x-6' : ''}`} />
                         </button>

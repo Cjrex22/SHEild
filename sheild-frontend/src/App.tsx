@@ -12,6 +12,7 @@ import { usePwaStore, type BeforeInstallPromptEvent } from './stores/pwaStore';
 import { useSosStore } from './stores/sosStore';
 import { useShakeDetection } from './hooks/useShakeDetection';
 import ShakeSOSOverlay from './components/ShakeSOSOverlay';
+import { formatLocationName } from './lib/locationHelper';
 
 import WelcomePage from './pages/auth/WelcomePage';
 import SignUpPage from './pages/auth/SignUpPage';
@@ -72,7 +73,7 @@ function App() {
         lng = pos.coords.longitude;
         try {
           const geo = await api.get(`/geocode/reverse?lat=${lat}&lng=${lng}`);
-          if (geo.locationName) locationName = geo.locationName;
+          locationName = formatLocationName(geo?.locationName, lat, lng);
         } catch { /* fallback to 'Unknown' */ }
       } catch { /* geolocation failed, proceed with zeros */ }
 

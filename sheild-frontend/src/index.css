@@ -3,45 +3,68 @@
 @tailwind utilities;
 
 :root {
-  --c-primary:         #C0392B;
-  --c-primary-hover:   #A93226;
-  --c-primary-light:   #E74C3C;
-  --c-primary-glow:    rgba(192, 57, 43, 0.40);
-  --c-primary-subtle:  rgba(192, 57, 43, 0.12);
-  --c-bg:              #0F0505;
-  --c-surface:         #1E0808;
-  --c-surface-2:       #2A0D0D;
-  --c-surface-3:       #351212;
+  color-scheme: dark;
+  --c-primary:         #FF3B30;
+  --c-primary-hover:   #E02E24;
+  --c-primary-light:   #FF5247;
+  --c-primary-glow:    rgba(255, 59, 48, 0.40);
+  --c-primary-subtle:  rgba(255, 59, 48, 0.12);
+  --c-bg:              #000000;
+  --c-surface:         #0A0A0A;
+  --c-surface-2:       #141414;
+  --c-surface-3:       #1E1E1E;
   --c-text-1:          #FFFFFF;
-  --c-text-2:          #FFB3B3;
-  --c-text-3:          #CC8888;
-  --c-text-disabled:   #664444;
-  --c-safe:            #27AE60;
-  --c-safe-glow:       rgba(39, 174, 96, 0.35);
-  --c-warning:         #E67E22;
-  --c-warning-glow:    rgba(230, 126, 34, 0.35);
-  --c-danger:          #FF2222;
-  --c-danger-glow:     rgba(255, 34, 34, 0.50);
-  --c-info:            #3498DB;
-  --c-border:          rgba(192, 57, 43, 0.20);
-  --c-border-strong:   rgba(192, 57, 43, 0.45);
-  --c-nav-bg:          rgba(15, 5, 5, 0.95);
-  --c-overlay:         rgba(0, 0, 0, 0.75);
+  --c-text-2:          #D4D4D8;
+  --c-text-3:          #71717A;
+  --c-text-disabled:   #3F3F46;
+  --c-safe:            #22C55E;
+  --c-safe-glow:       rgba(34, 197, 94, 0.35);
+  --c-warning:         #F59E0B;
+  --c-warning-glow:    rgba(245, 158, 11, 0.35);
+  --c-danger:          #EF4444;
+  --c-danger-glow:     rgba(239, 68, 68, 0.50);
+  --c-info:            #38BDF8;
+  --c-border:          rgba(255, 255, 255, 0.08);
+  --c-border-strong:   rgba(255, 255, 255, 0.18);
+  --c-nav-bg:          rgba(0, 0, 0, 0.88);
+  --c-overlay:         rgba(0, 0, 0, 0.85);
   --radius-sm:  8px;
   --radius-md:  14px;
   --radius-lg:  20px;
   --radius-xl:  28px;
   --radius-full: 9999px;
-  --shadow-card: 0 4px 24px rgba(0,0,0,0.4), 0 1px 4px rgba(0,0,0,0.3);
-  --shadow-sos:  0 0 40px var(--c-danger-glow), 0 0 80px var(--c-primary-glow);
+  --shadow-card: 0 4px 24px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.06);
+  --shadow-sos:  0 0 40px var(--c-danger-glow), 0 0 80px rgba(255, 59, 48, 0.30);
   --shadow-safe: 0 0 30px var(--c-safe-glow);
-  --shadow-nav:  0 -1px 0 var(--c-border), 0 -8px 32px rgba(0,0,0,0.5);
+  --shadow-nav:  0 -1px 0 var(--c-border), 0 -8px 32px rgba(0,0,0,0.9);
   --font-display: 'Playfair Display', serif;
   --font-body: 'DM Sans', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 }
 
-body { background: var(--c-bg); color: var(--c-text-1); font-family: var(--font-body); }
+/* Autofill dark mode override: prevent browser from turning autofilled inputs white */
+input:-webkit-autofill,
+input:-webkit-autofill:hover, 
+input:-webkit-autofill:focus, 
+input:-webkit-autofill:active,
+select:-webkit-autofill,
+textarea:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 1000px #0A0A0A inset !important;
+  box-shadow: 0 0 0 1000px #0A0A0A inset !important;
+  -webkit-text-fill-color: #FFFFFF !important;
+  caret-color: #FFFFFF !important;
+  transition: background-color 50000s ease-in-out 0s;
+}
+
+input:autofill,
+textarea:autofill,
+select:autofill {
+  filter: none !important;
+  background-color: #0A0A0A !important;
+  color: #FFFFFF !important;
+}
+
+body { background: var(--c-bg); color: var(--c-text-1); font-family: var(--font-body); color-scheme: dark; }
 * { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 /* cache buster */
 .cache-buster-123 { color: red; }
@@ -72,5 +95,12 @@ body { background: var(--c-bg); color: var(--c-text-1); font-family: var(--font-
 }
 .shake-banner-enter {
   animation: shakeBannerSlideIn 0.3s ease-out forwards;
+}
+
+/* Fix Leaflet forced cyan link styling in all popups and controls */
+.leaflet-container a,
+.leaflet-popup-content a {
+  color: #FFFFFF !important;
+  text-decoration: none !important;
 }
 

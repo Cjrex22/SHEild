@@ -1,16 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   ArrowLeft, LogOut, User, Shield, Heart, Camera, 
-  Lock, CheckCircle2, AlertCircle, 
-  Download, Loader2, Save, Phone, Mail
+  CheckCircle2, AlertCircle, 
+  Download, Loader2, Save, Phone, Mail,
+  AtSign, KeyRound, Eye, EyeOff
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { auth } from '../lib/firebase';
+import { auth, db } from '../lib/firebase';
+import { EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
+import { doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { useAuthStore } from '../stores/authStore';
 import { useSosStore } from '../stores/sosStore';
 import { usePwaStore } from '../stores/pwaStore';
 import { api } from '../lib/api';
 import toast from 'react-hot-toast';
+import SafetyTipsModal from '../components/SafetyTipsModal';
 
 type Tab = 'profile' | 'sos' | 'safety';
 
@@ -20,11 +24,22 @@ export default function SettingsPage() {
     const [activeTab, setActiveTab] = useState<Tab>('profile');
     const [isSaving, setIsSaving] = useState(false);
     const [uploadingAvatar, setUploadingAvatar] = useState(false);
+    const [isTipsModalOpen, setIsTipsModalOpen] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Profile State
     const [name, setName] = useState(profile?.name || '');
     const [phoneNumber, setPhoneNumber] = useState(profile?.phoneNumber || '');
+    const [email, setEmail] = useState(profile?.email || '');
+
+    // Username Change State (Password Protected)
+    const [isChangingUsername, setIsChangingUsername] = useState(false);
+    const [newUsername, setNewUsername] = useState('');
+    const [verifyPassword, setVerifyPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
+    const [usernameChecking, setUsernameChecking] = useState(false);
+    const [usernameStatus, setUsernameStatus] = useState<{ available?: boolean; error?: string } | null>(null);
+    const [isUpdatingUsername, setIsUpdatingUsername] = useState(false);
     
     // SOS Config State
     const [holdCountdown, setHoldCountdown] = useState(profile?.settings?.holdCountdown || 3);
@@ -42,11 +57,129 @@ export default function SettingsPage() {
         if (profile) {
             setName(profile.name || '');
             setPhoneNumber(profile.phoneNumber || '');
+            setEmail(profile.email || '');
             setHoldCountdown(profile.settings?.holdCountdown || 3);
             setAutoCallPolice(profile.settings?.autoCallPolice ?? true);
             setEmergencyNumber(profile.settings?.emergencyNumber || '100');
         }
     }, [profile]);
+
+    // Real-time debounced username availability checker
+    useEffect(() => {
+        const clean = newUsername.trim().toLowerCase();
+        if (!clean) {
+            setUsernameStatus(null);
+            return;
+        }
+        if (clean === profile?.username?.toLowerCase()) {
+            setUsernameStatus({ error: "Current username" });
+            return;
+        }
+        if (!/^[a-zA-Z0-9_]{3,20}$/.test(clean)) {
+            setUsernameStatus({ error: "3-20 characters: letters, numbers, underscores" });
+            return;
+        }
+
+        setUsernameChecking(true);
+        const timer = setTimeout(async () => {
+            try {
+                const res = await api.get(`/users/check-username?username=${clean}`);
+                setUsernameStatus({ available: res.available });
+            } catch {
+                setUsernameStatus(null);
+            } finally {
+                setUsernameChecking(false);
+            }
+        }, 400);
+
+        return () => clearTimeout(timer);
+    }, [newUsername, profile?.username]);
+
+    const handleUpdateUsername = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const cleanUsername = newUsername.trim().toLowerCase();
+
+        if (!cleanUsername) {
+            toast.error("Please enter a new username");
+            return;
+        }
+        if (cleanUsername === profile?.username?.toLowerCase()) {
+            toast.error("Please enter a username different from your current one");
+            return;
+        }
+        if (!/^[a-zA-Z0-9_]{3,20}$/.test(cleanUsername)) {
+            toast.error("Username must be 3-20 characters (letters, numbers, underscores)");
+            return;
+        }
+        if (!verifyPassword) {
+            toast.error("Please enter your current account password to confirm");
+            return;
+        }
+
+        setIsUpdatingUsername(true);
+        try {
+            const currentUser = auth.currentUser;
+            if (!currentUser || !currentUser.email) {
+                toast.error("User session expired. Please sign in again.");
+                setIsUpdatingUsername(false);
+                return;
+            }
+
+            // 1. Re-authenticate with Firebase Auth using current password
+            try {
+                const credential = EmailAuthProvider.credential(currentUser.email, verifyPassword);
+                await reauthenticateWithCredential(currentUser, credential);
+            } catch (authErr: any) {
+                if (authErr.code === 'auth/wrong-password' || authErr.code === 'auth/invalid-credential') {
+                    toast.error("Incorrect password. Please verify and try again.");
+                    setIsUpdatingUsername(false);
+                    return;
+                }
+                throw authErr;
+            }
+
+            // 2. Double-check username availability
+            const checkRes = await api.get(`/users/check-username?username=${cleanUsername}`);
+            if (!checkRes.available) {
+                toast.error(`@${cleanUsername} is already taken. Please choose another.`);
+                setIsUpdatingUsername(false);
+                return;
+            }
+
+            // 3. Update user profile via backend Admin SDK (authorized, bypasses client permission restrictions)
+            await api.put('/auth/profile', { username: cleanUsername });
+
+            // 4. Best-effort client-side Firestore document updates (gracefully catch if cloud rules restrict client writes)
+            const oldUsername = profile?.username;
+            try {
+                await updateDoc(doc(db, 'users', currentUser.uid), { username: cleanUsername });
+            } catch (e) {
+                // Handled by backend Admin SDK
+            }
+
+            try {
+                await setDoc(doc(db, 'usernames', cleanUsername), { uid: currentUser.uid });
+                if (oldUsername && oldUsername.toLowerCase() !== cleanUsername) {
+                    await deleteDoc(doc(db, 'usernames', oldUsername.toLowerCase()));
+                }
+            } catch (e) {
+                // Handled if usernames collection is admin-only in cloud
+            }
+
+            // 5. Update authStore so the entire app immediately sees the new handle
+            setProfile({ ...profile!, username: cleanUsername });
+
+            toast.success(`Username successfully changed to @${cleanUsername}!`);
+            setIsChangingUsername(false);
+            setNewUsername('');
+            setVerifyPassword('');
+            setUsernameStatus(null);
+        } catch (err: any) {
+            toast.error(err.message || "Failed to update username");
+        } finally {
+            setIsUpdatingUsername(false);
+        }
+    };
 
     const handleSignOut = async () => {
         await auth.signOut();
@@ -102,8 +235,16 @@ export default function SettingsPage() {
     const handleSaveProfile = async () => {
         setIsSaving(true);
         try {
-            await api.put('/auth/profile', { name, phoneNumber });
-            setProfile({ ...profile!, name, phoneNumber });
+            if (auth.currentUser && email && email !== profile?.email) {
+                try {
+                    const { updateEmail } = await import('firebase/auth');
+                    await updateEmail(auth.currentUser, email);
+                } catch (authErr) {
+                    console.warn("Firebase Auth updateEmail:", authErr);
+                }
+            }
+            await api.put('/auth/profile', { name, phoneNumber, email });
+            setProfile({ ...profile!, name, phoneNumber, email });
             toast.success("Profile saved!");
         } catch (err) {
             toast.error("Failed to update profile.");
@@ -160,7 +301,10 @@ export default function SettingsPage() {
         }
     };
 
-    const isProfileModified = name !== (profile?.name || '') || phoneNumber !== (profile?.phoneNumber || '');
+    const isProfileModified = 
+        name !== (profile?.name || '') || 
+        phoneNumber !== (profile?.phoneNumber || '') ||
+        email !== (profile?.email || '');
     const isSosModified = 
         holdCountdown !== (profile?.settings?.holdCountdown || 3) || 
         autoCallPolice !== (profile?.settings?.autoCallPolice ?? true) ||
@@ -261,17 +405,19 @@ export default function SettingsPage() {
                                 </div>
                             </div>
 
-                            <div className="space-y-1.5 opacity-50">
+                            <div className="space-y-1.5">
                                 <label className="text-[10px] font-bold uppercase tracking-widest text-text-3 ml-2">Email Address</label>
-                                <div className="relative">
-                                    <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-3" />
+                                <div className="relative group">
+                                    <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-3 group-focus-within:text-primary transition-colors" />
                                     <input 
                                         type="email" 
-                                        value={profile?.email || ''} 
-                                        disabled
-                                        className="w-full bg-surface/50 border border-white/5 rounded-xl py-3.5 pl-12 pr-12 text-white/50 text-sm cursor-not-allowed"
+                                        value={email} 
+                                        onChange={(e) => setEmail(e.target.value)}
+                                        placeholder="Enter email address"
+                                        autoComplete="off"
+                                        spellCheck={false}
+                                        className="w-full bg-surface border border-white/5 rounded-xl py-3.5 pl-12 pr-4 text-white text-sm focus:border-primary/50 outline-none transition-all"
                                     />
-                                    <Lock size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-text-3" />
                                 </div>
                             </div>
 
@@ -287,6 +433,156 @@ export default function SettingsPage() {
                                 {isSaving ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
                                 Save Profile Changes
                             </button>
+                        </div>
+
+                        {/* Change Username Section (Password Protected) */}
+                        <div className="bg-surface border border-white/10 rounded-2xl p-4 sm:p-5 space-y-4 shadow-card">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-bold text-base shrink-0">
+                                        <AtSign size={20} />
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold text-white text-sm">Username Handle</h3>
+                                        <p className="text-xs text-text-3">Your unique identifier for Guardian Circle</p>
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <span className="font-mono text-xs font-bold text-primary bg-primary/10 border border-primary/20 px-3 py-1 rounded-full">
+                                        @{profile?.username}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {!isChangingUsername ? (
+                                <div className="pt-2 flex items-center justify-between border-t border-white/5">
+                                    <p className="text-[11px] text-text-3 max-w-[200px] leading-tight">
+                                        Guardian Circle stays connected even after username changes.
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setIsChangingUsername(true);
+                                            setNewUsername('');
+                                            setVerifyPassword('');
+                                            setUsernameStatus(null);
+                                        }}
+                                        className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5"
+                                    >
+                                        <KeyRound size={13} className="text-primary" />
+                                        Change Username
+                                    </button>
+                                </div>
+                            ) : (
+                                <form onSubmit={handleUpdateUsername} className="pt-2 border-t border-white/5 space-y-3.5 animate-in fade-in duration-300">
+                                    {/* New Username Input */}
+                                    <div className="space-y-1.5">
+                                        <div className="flex items-center justify-between">
+                                            <label className="text-[10px] font-bold uppercase tracking-widest text-text-3 ml-2">New Username</label>
+                                            {usernameChecking && (
+                                                <span className="text-[10px] text-text-3 flex items-center gap-1">
+                                                    <Loader2 size={10} className="animate-spin" /> Checking...
+                                                </span>
+                                            )}
+                                            {!usernameChecking && usernameStatus?.available === true && (
+                                                <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                                                    <CheckCircle2 size={11} /> @{newUsername} is available
+                                                </span>
+                                            )}
+                                            {!usernameChecking && usernameStatus?.available === false && (
+                                                <span className="text-[10px] text-red-400 font-bold flex items-center gap-1">
+                                                    <AlertCircle size={11} /> Username already taken
+                                                </span>
+                                            )}
+                                            {!usernameChecking && usernameStatus?.error && (
+                                                <span className="text-[10px] text-amber-400 font-medium">
+                                                    {usernameStatus.error}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="relative group">
+                                            <AtSign size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-3 group-focus-within:text-primary transition-colors" />
+                                            <input 
+                                                type="text"
+                                                value={newUsername}
+                                                onChange={(e) => setNewUsername(e.target.value.toLowerCase().replace(/[^a-zA-Z0-9_]/g, ''))}
+                                                placeholder="new_username"
+                                                autoCapitalize="none"
+                                                autoComplete="off"
+                                                spellCheck={false}
+                                                maxLength={20}
+                                                className="w-full bg-surface-2 border border-white/10 rounded-xl py-3 pl-11 pr-4 text-white text-sm focus:border-primary/50 outline-none transition-all font-mono"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Current Password Input */}
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-bold uppercase tracking-widest text-text-3 ml-2">Confirm Account Password</label>
+                                        <div className="relative group">
+                                            <KeyRound size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-3 group-focus-within:text-primary transition-colors" />
+                                            <input 
+                                                type={showPassword ? "text" : "password"}
+                                                value={verifyPassword}
+                                                onChange={(e) => setVerifyPassword(e.target.value)}
+                                                placeholder="Enter password to verify identity"
+                                                autoComplete="current-password"
+                                                className="w-full bg-surface-2 border border-white/10 rounded-xl py-3 pl-11 pr-11 text-white text-sm focus:border-primary/50 outline-none transition-all"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowPassword(!showPassword)}
+                                                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-text-3 hover:text-white transition-colors"
+                                                aria-label="Toggle password visibility"
+                                            >
+                                                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                                            </button>
+                                        </div>
+                                        <p className="text-[11px] text-text-3 ml-2 leading-relaxed">
+                                            Password verification confirms your identity before changing your handle.
+                                        </p>
+                                    </div>
+
+                                    {/* Actions */}
+                                    <div className="flex items-center gap-2 pt-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setIsChangingUsername(false);
+                                                setNewUsername('');
+                                                setVerifyPassword('');
+                                                setUsernameStatus(null);
+                                            }}
+                                            className="flex-1 py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 text-xs font-bold text-text-2 transition-all"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            disabled={
+                                                isUpdatingUsername || 
+                                                !newUsername.trim() || 
+                                                newUsername.trim().toLowerCase() === profile?.username?.toLowerCase() ||
+                                                usernameStatus?.available === false ||
+                                                !verifyPassword
+                                            }
+                                            className="flex-1 py-3 rounded-xl bg-primary text-white text-xs font-bold hover:bg-primary-hover disabled:bg-white/5 disabled:text-text-3 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-sos"
+                                        >
+                                            {isUpdatingUsername ? (
+                                                <>
+                                                    <Loader2 size={14} className="animate-spin" />
+                                                    Verifying...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <CheckCircle2 size={14} />
+                                                    Verify & Change
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+                                </form>
+                            )}
                         </div>
 
                         {/* App Health */}
@@ -460,11 +756,30 @@ export default function SettingsPage() {
 
                         <div className="grid gap-4">
                             {[
-                                { title: 'Legal Rights & Laws', icon: Shield, desc: 'Know your rights regarding harassment and local laws.' },
-                                { title: 'First Aid Guidelines', icon: Heart, desc: 'Critical steps to take during medical emergencies.' },
-                                { title: 'Emergency Helpline Directory', icon: Phone, desc: 'Comprehensive list of local and national help numbers.' },
+                                { 
+                                    title: 'Legal Rights & Laws', 
+                                    icon: Shield, 
+                                    desc: 'Zero FIR, arrest after sunset rules, and protection against harassment.',
+                                    action: () => setIsTipsModalOpen(true)
+                                },
+                                { 
+                                    title: 'First Aid Guidelines', 
+                                    icon: Heart, 
+                                    desc: 'Critical response for fainting, trauma, and medical distress.',
+                                    action: () => setIsTipsModalOpen(true)
+                                },
+                                { 
+                                    title: 'Emergency Helpline Directory', 
+                                    icon: Phone, 
+                                    desc: 'Direct calling for 112, 1091, 181, 108 and verified safe zones.',
+                                    action: () => navigate('/safe-zones')
+                                },
                             ].map((item, idx) => (
-                                <div key={idx} className="bg-surface border border-white/5 p-5 rounded-2xl flex items-start gap-4 hover:bg-white/5 transition-colors cursor-pointer group">
+                                <div 
+                                    key={idx} 
+                                    onClick={item.action}
+                                    className="bg-surface border border-white/5 p-5 rounded-2xl flex items-start gap-4 hover:bg-white/5 transition-colors cursor-pointer group active:scale-[0.99]"
+                                >
                                     <div className="p-3 rounded-xl bg-primary/10 text-primary group-hover:bg-primary group-hover:text-white transition-all">
                                         <item.icon size={24} />
                                     </div>
@@ -476,15 +791,23 @@ export default function SettingsPage() {
                             ))}
                         </div>
 
-                        <div className="p-6 bg-surface-2 rounded-3xl border border-white/5 mt-4 text-center space-y-3">
-                            <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center mx-auto text-text-3">
+                        <div 
+                            onClick={() => setIsTipsModalOpen(true)}
+                            className="p-6 bg-surface-2 rounded-3xl border border-white/5 mt-4 text-center space-y-3 cursor-pointer hover:border-white/15 transition-all group shadow-card"
+                        >
+                            <div className="w-12 h-12 bg-primary/10 text-primary rounded-full flex items-center justify-center mx-auto border border-primary/20 group-hover:scale-110 transition-transform">
                                 <Shield size={24} />
                             </div>
-                            <h3 className="font-bold text-white">Community Safety Tips</h3>
-                            <p className="text-xs text-text-3">Join our community discussions to learn and share safety tips with other SHEild users.</p>
+                            <h3 className="font-bold text-white text-base">Community Safety Tips</h3>
+                            <p className="text-xs text-text-3 max-w-xs mx-auto leading-relaxed">
+                                Join our community discussions to learn and share safety tips with other SHEild users.
+                            </p>
                             <button 
-                                onClick={() => toast("Community Safety Tips coming soon!", { icon: "💡" })}
-                                className="text-xs font-bold text-primary hover:underline"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIsTipsModalOpen(true);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-primary text-white text-xs font-bold hover:bg-primary-hover active:scale-95 transition-all shadow-sos"
                             >
                                 View All Tips
                             </button>
@@ -496,6 +819,12 @@ export default function SettingsPage() {
                     SHEild v1.0.0 (Production Build) • Developed for SHEild Safety
                 </p>
             </main>
+
+            {/* Comprehensive Solo Travel & Safety Guide Modal */}
+            <SafetyTipsModal 
+                isOpen={isTipsModalOpen} 
+                onClose={() => setIsTipsModalOpen(false)} 
+            />
         </div>
     );
 }

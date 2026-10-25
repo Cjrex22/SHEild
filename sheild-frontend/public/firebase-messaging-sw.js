@@ -2,12 +2,12 @@ importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js
 importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js');
 
 firebase.initializeApp({
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.firebasestorage.app",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyDVycmqQCpLQYH22e5hi5hcUFxe3obEDS4",
+  authDomain: "sheild-app-prod-1234.firebaseapp.com",
+  projectId: "sheild-app-prod-1234",
+  storageBucket: "sheild-app-prod-1234.appspot.com",
+  messagingSenderId: "296306996390",
+  appId: "1:296306996390:web:ca1b7c1141a1cd0f447067"
 });
 
 const messaging = firebase.messaging();

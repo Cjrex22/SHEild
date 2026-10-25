@@ -2,6 +2,7 @@ import { X, CheckCircle2, ShieldAlert, MapPin, Users } from 'lucide-react';
 import { useNotificationStore, type NotificationItem } from '../stores/notificationStore';
 import { api } from '../lib/api';
 import toast from 'react-hot-toast';
+import { formatLocationName } from '../lib/locationHelper';
 
 interface Props {
     isOpen: boolean;
@@ -113,10 +114,10 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                                                         cursor: 'pointer'
                                                     }}
                                                 >
-                                                    📍 {item.locationName}
+                                                    📍 {formatLocationName(item.locationName, item.lat, item.lng)}
                                                 </button>
                                             ) : (
-                                                <p className="text-text-2"><MapPin size={12} className="inline mr-1 opacity-70"/>{item.locationName}</p>
+                                                <p className="text-text-2"><MapPin size={12} className="inline mr-1 opacity-70"/>{formatLocationName(item.locationName)}</p>
                                             )}
                                         </div>
                                     )}

@@ -78,7 +78,7 @@ export default function ShakeSOSOverlay({ visible, onConfirm, onCancel }: ShakeS
 
   if (animState === 'hidden') return null;
 
-  const portalTarget = document.getElementById('shake-portal');
+  const portalTarget = (typeof document !== 'undefined' ? document.getElementById('shake-portal') : null) || (typeof document !== 'undefined' ? document.body : null);
   if (!portalTarget) return null;
 
   // SVG countdown ring
