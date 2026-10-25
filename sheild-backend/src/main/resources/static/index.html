@@ -4,12 +4,21 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#000000" />
     <title>SHEild - Your Digital Bodyguard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
-    <script type="module" crossorigin src="/assets/index-BUHnltRA.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-B0mhungf.css">
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono&family=Outfit:wght@700&family=Space+Grotesk:wght@700&family=Plus+Jakarta+Sans:wght@700&display=swap" rel="stylesheet">
+    <script>
+      window.deferredPwaPrompt = null;
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        window.deferredPwaPrompt = e;
+      });
+    </script>
+    <script type="module" crossorigin src="/assets/index-WTH_GDM3.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CZi7rvmu.css">
   <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
   <body>
     <div id="root"></div>
+    <div id="shake-portal"></div>
   </body>
 </html>
