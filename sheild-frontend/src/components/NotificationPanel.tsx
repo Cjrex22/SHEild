@@ -25,38 +25,19 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
             const uids: string[] = [];
             const usernames: string[] = [];
             snap.docs.forEach(d => {
-                uids.push(d.id);
                 const data = d.data();
-                if (data.uid) uids.push(data.uid);
-                if (data.username) usernames.push(data.username.toLowerCase());
+                // ONLY count as connected if explicitly accepted!
+                if (data.status === 'accepted' || data.accepted === true) {
+                    uids.push(d.id);
+                    if (data.uid) uids.push(data.uid);
+                    if (data.username) usernames.push(data.username.toLowerCase());
+                }
             });
             setCircleMemberUids(Array.from(new Set(uids)));
             setCircleMemberUsernames(Array.from(new Set(usernames)));
         });
         return unsub;
     }, []);
-
-    // Automatically mark notifications as accepted if the sender is already in our circle
-    useEffect(() => {
-        const uid = auth.currentUser?.uid;
-        if (!uid || (circleMemberUids.length === 0 && circleMemberUsernames.length === 0)) return;
-
-        items.forEach(item => {
-            const isCircleNotif = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
-            if (!isCircleNotif || item.accepted || item.declined) return;
-
-            const isAlreadyInCircle = 
-                (item.fromUid && circleMemberUids.includes(item.fromUid)) ||
-                (item.fromUsername && circleMemberUsernames.includes(item.fromUsername.toLowerCase()));
-
-            if (isAlreadyInCircle) {
-                setDoc(doc(db, 'notifications', uid, 'items', item.id), {
-                    accepted: true,
-                    read: true
-                }, { merge: true }).catch(() => {});
-            }
-        });
-    }, [items, circleMemberUids, circleMemberUsernames]);
 
     const handleAcceptCircleInvite = async (e: React.MouseEvent, item: NotificationItem) => {
         e.stopPropagation();
@@ -78,20 +59,25 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
             await api.post(`/circle/${targetUid}`);
             const uid = auth.currentUser?.uid;
             if (uid) {
+                // Set my circle details for inviter as accepted
                 await setDoc(doc(db, 'users', uid, 'guardCircleDetails', targetUid), {
                     uid: targetUid,
                     name: item.fromName || '',
                     username: item.fromUsername || '',
+                    avatarUrl: item.fromAvatarUrl || '',
                     status: 'accepted',
-                    accepted: true
+                    accepted: true,
+                    connectedAt: new Date()
                 }, { merge: true }).catch(() => {});
 
                 // Also update the inviter's circle document for this user to accepted
                 await setDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid), {
                     status: 'accepted',
-                    accepted: true
+                    accepted: true,
+                    connectedAt: new Date()
                 }, { merge: true }).catch(() => {});
 
+                // Mark current notification as accepted and read
                 await setDoc(doc(db, 'notifications', uid, 'items', item.id), {
                     read: true,
                     accepted: true
@@ -113,6 +99,12 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                     read: true,
                     declined: true
                 }, { merge: true }).catch(() => {});
+
+                // Clean up any pending records in guardCircleDetails
+                if (item.fromUid) {
+                    await deleteDoc(doc(db, 'users', uid, 'guardCircleDetails', item.fromUid)).catch(() => {});
+                    await deleteDoc(doc(db, 'users', item.fromUid, 'guardCircleDetails', uid)).catch(() => {});
+                }
             }
             markAsRead(item.id);
             toast.success('Invitation declined');
@@ -311,13 +303,14 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                                     )}
 
                                     {(item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'))) && (() => {
-                                        const isAlreadyInCircle = 
+                                        const isConnected = 
+                                            item.accepted === true ||
                                             (item.fromUid && circleMemberUids.includes(item.fromUid)) ||
                                             (item.fromUsername && circleMemberUsernames.includes(item.fromUsername.toLowerCase()));
 
                                         return (
                                             <div className="mt-3 flex items-center gap-2 pt-2.5 border-t border-white/5">
-                                                {item.accepted || isAlreadyInCircle ? (
+                                                {isConnected ? (
                                                     <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-bold bg-emerald-500/15 px-2.5 py-1 rounded-full border border-emerald-500/30">
                                                         <Check size={12} /> Connected in Guard Circle
                                                     </span>
@@ -329,13 +322,13 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                                                             onClick={(e) => handleAcceptCircleInvite(e, item)}
                                                             className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
                                                         >
-                                                            <Check size={14} /> Accept Invite
+                                                            <Check size={14} /> Accept
                                                         </button>
                                                         <button
                                                             onClick={(e) => handleDeclineCircleInvite(e, item)}
                                                             className="px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-95 text-zinc-300 text-xs font-medium rounded-xl flex items-center gap-1 transition-all border border-white/10"
                                                         >
-                                                            <X size={14} /> Decline
+                                                            <X size={14} /> Cancel
                                                         </button>
                                                     </>
                                                 )}
