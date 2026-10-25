@@ -24,6 +24,8 @@ interface NotifState {
     setItems: (items: NotificationItem[]) => void;
     markAsRead: (id: string) => void;
     markAllAsRead: () => void;
+    removeItem: (id: string) => void;
+    clearAll: () => void;
 }
 
 export const useNotificationStore = create<NotifState>((set) => ({
@@ -38,4 +40,9 @@ export const useNotificationStore = create<NotifState>((set) => ({
         const newItems = state.items.map(i => ({ ...i, read: true }));
         return { items: newItems, unreadCount: 0 };
     }),
+    removeItem: (id) => set((state) => {
+        const newItems = state.items.filter(i => i.id !== id);
+        return { items: newItems, unreadCount: newItems.filter(i => !i.read).length };
+    }),
+    clearAll: () => set({ items: [], unreadCount: 0 }),
 }));
