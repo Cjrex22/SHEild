@@ -5,7 +5,7 @@ import { auth } from './lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { useAuthStore } from './stores/authStore';
 import { api } from './lib/api';
-import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, limit, doc, setDoc } from 'firebase/firestore';
 import { db } from './lib/firebase';
 import { useNotificationStore } from './stores/notificationStore';
 import { usePwaStore, type BeforeInstallPromptEvent } from './stores/pwaStore';
@@ -148,8 +148,37 @@ function App() {
 
   useEffect(() => {
     let unsubNotifs: () => void;
+    let unsubCircle: () => void;
 
-    if (user) {
+    if (user?.uid) {
+      let circleRecords: Record<string, any> = {};
+
+      const healCircleNotifications = (items: any[], records: Record<string, any>) => {
+        if (!user.uid || items.length === 0) return;
+        items.forEach(item => {
+          const isCircleNotif = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
+          if (!isCircleNotif) return;
+
+          const targetUid = item.fromUid;
+          if (targetUid && records[targetUid]) {
+            const rec = records[targetUid];
+            if (!item.accepted) {
+              setDoc(doc(db, 'notifications', user.uid, 'items', item.id), {
+                accepted: true,
+                read: true
+              }, { merge: true }).catch(() => {});
+            }
+            if (rec.status !== 'accepted' || !rec.accepted) {
+              setDoc(doc(db, 'users', user.uid, 'guardCircleDetails', targetUid), {
+                status: 'accepted',
+                accepted: true,
+                connectedAt: new Date()
+              }, { merge: true }).catch(() => {});
+            }
+          }
+        });
+      };
+
       const q = query(
         collection(db, 'notifications', user.uid, 'items'),
         orderBy('createdAt', 'desc'),
@@ -158,11 +187,23 @@ function App() {
       unsubNotifs = onSnapshot(q, (snap) => {
         const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
         useNotificationStore.getState().setItems(items);
+        healCircleNotifications(items, circleRecords);
+      });
+
+      unsubCircle = onSnapshot(collection(db, 'users', user.uid, 'guardCircleDetails'), (snap) => {
+        const records: Record<string, any> = {};
+        snap.docs.forEach(d => {
+          records[d.id] = d.data();
+        });
+        circleRecords = records;
+        const currentItems = useNotificationStore.getState().items;
+        healCircleNotifications(currentItems, records);
       });
     }
 
     return () => {
       if (unsubNotifs) unsubNotifs();
+      if (unsubCircle) unsubCircle();
     };
   }, [user]);
 

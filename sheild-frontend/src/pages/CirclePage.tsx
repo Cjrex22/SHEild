@@ -18,6 +18,7 @@ export default function CirclePage() {
     const [searchTerm, setSearchTerm] = useState('');
     const [searchResults, setSearchResults] = useState<any[]>([]);
     const [circleMembers, setCircleMembers] = useState<any[]>([]);
+    const [isCircleLoading, setIsCircleLoading] = useState(true);
     const [liveUserData, setLiveUserData] = useState<Record<string, any>>({});
     const [loading, setLoading] = useState(false);
     const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
@@ -28,10 +29,11 @@ export default function CirclePage() {
         const isMutualInBackend = Array.isArray(liveInfo?.guardCircle) && !!profile?.uid && liveInfo.guardCircle.includes(profile.uid);
         const hasAcceptedNotifFromMember = notifItems.some(item => 
             (item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'))) &&
-            (item.fromUid === member.uid || (item.fromUsername && member.username && item.fromUsername.toLowerCase() === member.username.toLowerCase()))
+            ((item.fromUid && item.fromUid === member.uid) || 
+             (item.fromUsername && member.username && item.fromUsername.toLowerCase() === member.username.toLowerCase()))
         );
 
-        return member.status === 'accepted' || member.accepted === true || isMutualInBackend || (member.role === 'inviter' && hasAcceptedNotifFromMember);
+        return member.status === 'accepted' || member.accepted === true || isMutualInBackend || hasAcceptedNotifFromMember;
     });
 
     // Outgoing invitations sent by me that are still pending acceptance
@@ -42,7 +44,7 @@ export default function CirclePage() {
     });
 
     // Incoming circle invites where I am the recipient, waiting for my acceptance or cancellation
-    const pendingInvites = notifItems.filter(item => {
+    const pendingInvites = isCircleLoading ? [] : notifItems.filter(item => {
         const isInvite = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
         if (!isInvite || item.declined || item.accepted) return false;
 
@@ -56,12 +58,55 @@ export default function CirclePage() {
         );
         if (isAlreadyConnected) return false;
 
-        // If I am the inviter for this user, it's an outgoing invite, not an incoming one
-        const myDocForSender = item.fromUid ? circleMembers.find(m => m.uid === item.fromUid) : null;
-        if (myDocForSender?.role === 'inviter') return false;
+        // If this sender is already in my circle details (e.g. I already invited/added them), NEVER prompt me to accept!
+        const existingMember = circleMembers.find(m => 
+            (item.fromUid && m.uid === item.fromUid) || 
+            (item.fromUsername && m.username && m.username.toLowerCase() === item.fromUsername.toLowerCase())
+        );
+        if (existingMember) return false;
+
+        // If this sender is in profile.guardCircle, NEVER prompt me to accept!
+        if (item.fromUid && Array.isArray(profile?.guardCircle) && profile.guardCircle.includes(item.fromUid)) {
+            return false;
+        }
 
         return true;
     });
+
+    // Whenever a member in our circle details has accepted (or sent circle_add notification),
+    // ensure their Firestore document and notification are permanently saved as accepted!
+    useEffect(() => {
+        if (!profile?.uid || circleMembers.length === 0 || notifItems.length === 0) return;
+
+        notifItems.forEach(item => {
+            const isCircleNotif = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
+            if (!isCircleNotif) return;
+
+            const member = circleMembers.find(m => 
+                (item.fromUid && m.uid === item.fromUid) || 
+                (item.fromUsername && m.username && m.username.toLowerCase() === item.fromUsername.toLowerCase())
+            );
+
+            if (member) {
+                // If the notification hasn't been marked accepted in Firestore yet, mark it now
+                if (!item.accepted) {
+                    setDoc(doc(db, 'notifications', profile.uid, 'items', item.id), {
+                        accepted: true,
+                        read: true
+                    }, { merge: true }).catch(() => {});
+                }
+
+                // If our local member record hasn't been marked accepted in Firestore yet, mark it now
+                if (member.status !== 'accepted' || !member.accepted) {
+                    setDoc(doc(db, 'users', profile.uid, 'guardCircleDetails', member.uid), {
+                        status: 'accepted',
+                        accepted: true,
+                        connectedAt: new Date()
+                    }, { merge: true }).catch(() => {});
+                }
+            }
+        });
+    }, [circleMembers, notifItems, profile?.uid]);
 
     useEffect(() => {
         if (!profile?.uid) return;
@@ -74,6 +119,9 @@ export default function CirclePage() {
                 return timeB - timeA;
             });
             setCircleMembers(members);
+            setIsCircleLoading(false);
+        }, () => {
+            setIsCircleLoading(false);
         });
         return unsub;
     }, [profile?.uid]);

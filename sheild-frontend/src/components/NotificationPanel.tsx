@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, CheckCircle2, ShieldAlert, MapPin, Users, Check, Trash2, Clock } from 'lucide-react';
+import { X, CheckCircle2, ShieldAlert, MapPin, Users, Check, Trash2 } from 'lucide-react';
 import { useNotificationStore, type NotificationItem } from '../stores/notificationStore';
 import { useAuthStore } from '../stores/authStore';
 import { api } from '../lib/api';
@@ -15,13 +15,14 @@ interface Props {
 
 export default function NotificationPanel({ isOpen, onClose }: Props) {
     const { items, unreadCount, markAsRead, markAllAsRead, removeItem, clearAll } = useNotificationStore();
+    const { profile } = useAuthStore();
+    const currentUid = profile?.uid || auth.currentUser?.uid;
     const [circleMemberRecords, setCircleMemberRecords] = useState<Record<string, any>>({});
     const [isClearing, setIsClearing] = useState(false);
 
     useEffect(() => {
-        const uid = auth.currentUser?.uid;
-        if (!uid) return;
-        const unsub = onSnapshot(collection(db, 'users', uid, 'guardCircleDetails'), (snap) => {
+        if (!currentUid) return;
+        const unsub = onSnapshot(collection(db, 'users', currentUid, 'guardCircleDetails'), (snap) => {
             const records: Record<string, any> = {};
             snap.docs.forEach(d => {
                 const data = d.data();
@@ -32,7 +33,39 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
             setCircleMemberRecords(records);
         });
         return unsub;
-    }, []);
+    }, [currentUid]);
+
+    // Auto-heal circle notifications when sender is already part of our circle
+    useEffect(() => {
+        if (!currentUid || items.length === 0) return;
+
+        items.forEach(item => {
+            const isCircleNotif = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
+            if (!isCircleNotif) return;
+
+            const senderRecord = (item.fromUid && circleMemberRecords[item.fromUid]) || 
+                                 (item.fromUsername && circleMemberRecords[item.fromUsername.toLowerCase()]);
+            const isMutualInProfile = item.fromUid && Array.isArray(profile?.guardCircle) && profile.guardCircle.includes(item.fromUid);
+
+            if (senderRecord || isMutualInProfile) {
+                if (!item.accepted) {
+                    setDoc(doc(db, 'notifications', currentUid, 'items', item.id), {
+                        accepted: true,
+                        read: true
+                    }, { merge: true }).catch(() => {});
+                }
+
+                const targetMemberUid = item.fromUid || senderRecord?.uid;
+                if (targetMemberUid && (senderRecord?.status !== 'accepted' || !senderRecord?.accepted)) {
+                    setDoc(doc(db, 'users', currentUid, 'guardCircleDetails', targetMemberUid), {
+                        status: 'accepted',
+                        accepted: true,
+                        connectedAt: new Date()
+                    }, { merge: true }).catch(() => {});
+                }
+            }
+        });
+    }, [items, circleMemberRecords, currentUid, profile?.guardCircle]);
 
     const handleAcceptCircleInvite = async (e: React.MouseEvent, item: NotificationItem) => {
         e.stopPropagation();
@@ -52,8 +85,8 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
             }
 
             await api.post(`/circle/${targetUid}`);
-            const uid = auth.currentUser?.uid;
-            const currentUser = useAuthStore.getState().profile;
+            const uid = currentUid;
+            const currentUser = profile || useAuthStore.getState().profile;
             if (uid) {
                 // Set my circle details for inviter as accepted (role: invitee)
                 await setDoc(doc(db, 'users', uid, 'guardCircleDetails', targetUid), {
@@ -95,7 +128,7 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
     const handleDeclineCircleInvite = async (e: React.MouseEvent, item: NotificationItem) => {
         e.stopPropagation();
         try {
-            const uid = auth.currentUser?.uid;
+            const uid = currentUid;
             if (uid) {
                 await setDoc(doc(db, 'notifications', uid, 'items', item.id), {
                     read: true,
@@ -141,7 +174,7 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
         if (!window.confirm('Are you sure you want to clear all notifications?')) return;
         setIsClearing(true);
         try {
-            const uid = auth.currentUser?.uid;
+            const uid = currentUid;
             if (uid) {
                 for (let i = 0; i < items.length; i += 400) {
                     const chunk = items.slice(i, i + 400);
@@ -164,7 +197,7 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
     const handleDeleteItem = async (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
         try {
-            const uid = auth.currentUser?.uid;
+            const uid = currentUid;
             if (uid) {
                 await deleteDoc(doc(db, 'notifications', uid, 'items', id));
             }
@@ -309,9 +342,9 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                                         const senderRecord = (item.fromUid && circleMemberRecords[item.fromUid]) || 
                                                              (item.fromUsername && circleMemberRecords[item.fromUsername.toLowerCase()]);
 
-                                        const isInviterPending = senderRecord?.role === 'inviter' && (senderRecord?.status === 'pending' || senderRecord?.accepted === false);
+                                        const isMutualInProfile = item.fromUid && Array.isArray(profile?.guardCircle) && profile.guardCircle.includes(item.fromUid);
                                         const isCurrentlyAccepted = senderRecord && (senderRecord.status === 'accepted' || senderRecord.accepted === true);
-                                        const isConnected = (item.accepted === true || isCurrentlyAccepted) && !isInviterPending;
+                                        const isConnected = item.accepted === true || isCurrentlyAccepted || isMutualInProfile || !!senderRecord;
 
                                         return (
                                             <div className="mt-3 flex items-center gap-2 pt-2.5 border-t border-white/5">
@@ -321,10 +354,6 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                                                     </span>
                                                 ) : item.declined ? (
                                                     <span className="text-[11px] text-text-3 italic">Invitation declined</span>
-                                                ) : isInviterPending ? (
-                                                    <span className="inline-flex items-center gap-1 text-[11px] text-amber-400 font-medium bg-amber-500/15 px-2.5 py-1 rounded-full border border-amber-500/30">
-                                                        <Clock size={12} /> Invitation sent · Waiting for acceptance
-                                                    </span>
                                                 ) : (
                                                     <>
                                                         <button
