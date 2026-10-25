@@ -8,7 +8,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useNotificationStore, type NotificationItem } from '../stores/notificationStore';
 import { api } from '../lib/api';
 import { db } from '../lib/firebase';
-import { collection, onSnapshot, query, orderBy, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
 export default function CirclePage() {
@@ -24,19 +24,14 @@ export default function CirclePage() {
 
     // Only members who have ACTUALLY accepted are in our active Guard Circle
     const connectedMembers = circleMembers.filter(member => {
-        const isAccepted = member.status === 'accepted' || member.accepted === true;
-        if (!isAccepted) return false;
+        const liveInfo = liveUserData[member.uid];
+        const isMutualInBackend = Array.isArray(liveInfo?.guardCircle) && !!profile?.uid && liveInfo.guardCircle.includes(profile.uid);
+        const hasAcceptedNotifFromMember = notifItems.some(item => 
+            (item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'))) &&
+            (item.fromUid === member.uid || (item.fromUsername && member.username && item.fromUsername.toLowerCase() === member.username.toLowerCase()))
+        );
 
-        // If there is an active, unaccepted incoming invite from this member, it needs acceptance first
-        const hasPendingIncoming = notifItems.some(item => {
-            const isInvite = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
-            if (!isInvite || item.declined || item.accepted) return false;
-            return (item.fromUid && item.fromUid === member.uid) || 
-                   (item.fromUsername && member.username && item.fromUsername.toLowerCase() === member.username.toLowerCase());
-        });
-        if (hasPendingIncoming) return false;
-
-        return true;
+        return member.status === 'accepted' || member.accepted === true || isMutualInBackend || (member.role === 'inviter' && hasAcceptedNotifFromMember);
     });
 
     // Outgoing invitations sent by me that are still pending acceptance
@@ -54,6 +49,13 @@ export default function CirclePage() {
         // Don't show if this notification was sent by myself
         if (item.fromUid && profile?.uid && item.fromUid === profile.uid) return false;
 
+        // If I am already connected with this user, don't show incoming prompt
+        const isAlreadyConnected = connectedMembers.some(m => 
+            (item.fromUid && m.uid === item.fromUid) || 
+            (item.fromUsername && m.username && m.username.toLowerCase() === item.fromUsername.toLowerCase())
+        );
+        if (isAlreadyConnected) return false;
+
         // If I am the inviter for this user, it's an outgoing invite, not an incoming one
         const myDocForSender = item.fromUid ? circleMembers.find(m => m.uid === item.fromUid) : null;
         if (myDocForSender?.role === 'inviter') return false;
@@ -63,15 +65,20 @@ export default function CirclePage() {
 
     useEffect(() => {
         if (!profile?.uid) return;
-        const q = query(collection(db, 'users', profile.uid, 'guardCircleDetails'), orderBy('addedAt', 'desc'));
+        const q = collection(db, 'users', profile.uid, 'guardCircleDetails');
         const unsub = onSnapshot(q, (snap) => {
-            const members = snap.docs.map(d => d.data());
+            const members = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+            members.sort((a: any, b: any) => {
+                const timeA = a.connectedAt?.seconds || a.addedAt?.seconds || (a.addedAt?.getTime ? a.addedAt.getTime() / 1000 : 0);
+                const timeB = b.connectedAt?.seconds || b.addedAt?.seconds || (b.addedAt?.getTime ? b.addedAt.getTime() / 1000 : 0);
+                return timeB - timeA;
+            });
             setCircleMembers(members);
         });
         return unsub;
     }, [profile?.uid]);
 
-    // Live subscription to each member's user profile so username changes are immediately reflected
+    // Live subscription to each member's user profile so username changes and circle status are immediately reflected
     useEffect(() => {
         if (circleMembers.length === 0 || !profile?.uid) return;
         const unsubs = circleMembers.map(member => {
@@ -86,6 +93,15 @@ export default function CirclePage() {
                         updates.username = data.username;
                         updates.name = data.name || member.name;
                         updates.avatarUrl = data.avatarUrl || member.avatarUrl || '';
+                    }
+
+                    // If the other user has added me in backend guardCircle, ensure local record is accepted!
+                    if (Array.isArray(data.guardCircle) && profile?.uid && data.guardCircle.includes(profile.uid)) {
+                        if (member.status !== 'accepted' || !member.accepted) {
+                            updates.status = 'accepted';
+                            updates.accepted = true;
+                            updates.connectedAt = new Date();
+                        }
                     }
 
                     if (Object.keys(updates).length > 0) {
@@ -142,12 +158,26 @@ export default function CirclePage() {
 
     const handleAcceptIncomingInvite = async (invite: NotificationItem) => {
         try {
-            await api.post(`/circle/${invite.fromUid}`);
+            let targetUid = invite.fromUid;
+            if (!targetUid && invite.fromUsername) {
+                try {
+                    const searchRes = await api.get(`/users/search?q=${invite.fromUsername}`);
+                    const matched = searchRes?.find((u: any) => u.username?.toLowerCase() === invite.fromUsername.toLowerCase());
+                    if (matched?.uid) targetUid = matched.uid;
+                } catch {}
+            }
+
+            if (!targetUid) {
+                toast.error('Unable to resolve inviter details');
+                return;
+            }
+
+            await api.post(`/circle/${targetUid}`);
             const uid = profile?.uid;
             if (uid) {
                 // Set my circle details for inviter as accepted (role: invitee)
-                await setDoc(doc(db, 'users', uid, 'guardCircleDetails', invite.fromUid), {
-                    uid: invite.fromUid,
+                await setDoc(doc(db, 'users', uid, 'guardCircleDetails', targetUid), {
+                    uid: targetUid,
                     name: invite.fromName || '',
                     username: invite.fromUsername || '',
                     avatarUrl: invite.fromAvatarUrl || '',
@@ -158,7 +188,7 @@ export default function CirclePage() {
                 }, { merge: true }).catch(() => {});
 
                 // Update inviter's circle document for me as accepted as well (role: inviter)
-                await setDoc(doc(db, 'users', invite.fromUid, 'guardCircleDetails', uid), {
+                await setDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid), {
                     uid: uid,
                     name: profile?.name || '',
                     username: profile?.username || '',
