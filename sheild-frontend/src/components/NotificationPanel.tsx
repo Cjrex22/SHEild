@@ -1,8 +1,9 @@
+import { useState, useEffect } from 'react';
 import { X, CheckCircle2, ShieldAlert, MapPin, Users, Check } from 'lucide-react';
 import { useNotificationStore, type NotificationItem } from '../stores/notificationStore';
 import { api } from '../lib/api';
 import { auth, db } from '../lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, collection, onSnapshot } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { formatLocationName } from '../lib/locationHelper';
 
@@ -13,6 +14,48 @@ interface Props {
 
 export default function NotificationPanel({ isOpen, onClose }: Props) {
     const { items, unreadCount, markAsRead, markAllAsRead } = useNotificationStore();
+    const [circleMemberUids, setCircleMemberUids] = useState<string[]>([]);
+    const [circleMemberUsernames, setCircleMemberUsernames] = useState<string[]>([]);
+
+    useEffect(() => {
+        const uid = auth.currentUser?.uid;
+        if (!uid) return;
+        const unsub = onSnapshot(collection(db, 'users', uid, 'guardCircleDetails'), (snap) => {
+            const uids: string[] = [];
+            const usernames: string[] = [];
+            snap.docs.forEach(d => {
+                uids.push(d.id);
+                const data = d.data();
+                if (data.uid) uids.push(data.uid);
+                if (data.username) usernames.push(data.username.toLowerCase());
+            });
+            setCircleMemberUids(Array.from(new Set(uids)));
+            setCircleMemberUsernames(Array.from(new Set(usernames)));
+        });
+        return unsub;
+    }, []);
+
+    // Automatically mark notifications as accepted if the sender is already in our circle
+    useEffect(() => {
+        const uid = auth.currentUser?.uid;
+        if (!uid || (circleMemberUids.length === 0 && circleMemberUsernames.length === 0)) return;
+
+        items.forEach(item => {
+            const isCircleNotif = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
+            if (!isCircleNotif || item.accepted || item.declined) return;
+
+            const isAlreadyInCircle = 
+                (item.fromUid && circleMemberUids.includes(item.fromUid)) ||
+                (item.fromUsername && circleMemberUsernames.includes(item.fromUsername.toLowerCase()));
+
+            if (isAlreadyInCircle) {
+                setDoc(doc(db, 'notifications', uid, 'items', item.id), {
+                    accepted: true,
+                    read: true
+                }, { merge: true }).catch(() => {});
+            }
+        });
+    }, [items, circleMemberUids, circleMemberUsernames]);
 
     const handleAcceptCircleInvite = async (e: React.MouseEvent, item: NotificationItem) => {
         e.stopPropagation();
@@ -38,6 +81,12 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                     uid: targetUid,
                     name: item.fromName || '',
                     username: item.fromUsername || '',
+                    status: 'accepted',
+                    accepted: true
+                }, { merge: true }).catch(() => {});
+
+                // Also update the inviter's circle document for this user to accepted
+                await setDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid), {
                     status: 'accepted',
                     accepted: true
                 }, { merge: true }).catch(() => {});
@@ -181,32 +230,38 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                                         </div>
                                     )}
 
-                                    {(item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'))) && (
-                                        <div className="mt-3 flex items-center gap-2 pt-2.5 border-t border-white/5">
-                                            {item.accepted ? (
-                                                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-bold bg-emerald-500/15 px-2.5 py-1 rounded-full border border-emerald-500/30">
-                                                    <Check size={12} /> Connected in Circle
-                                                </span>
-                                            ) : item.declined ? (
-                                                <span className="text-[11px] text-text-3 italic">Invitation declined</span>
-                                            ) : (
-                                                <>
-                                                    <button
-                                                        onClick={(e) => handleAcceptCircleInvite(e, item)}
-                                                        className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
-                                                    >
-                                                        <Check size={14} /> Accept Invite
-                                                    </button>
-                                                    <button
-                                                        onClick={(e) => handleDeclineCircleInvite(e, item)}
-                                                        className="px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-95 text-zinc-300 text-xs font-medium rounded-xl flex items-center gap-1 transition-all border border-white/10"
-                                                    >
-                                                        <X size={14} /> Decline
-                                                    </button>
-                                                </>
-                                            )}
-                                        </div>
-                                    )}
+                                    {(item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'))) && (() => {
+                                        const isAlreadyInCircle = 
+                                            (item.fromUid && circleMemberUids.includes(item.fromUid)) ||
+                                            (item.fromUsername && circleMemberUsernames.includes(item.fromUsername.toLowerCase()));
+
+                                        return (
+                                            <div className="mt-3 flex items-center gap-2 pt-2.5 border-t border-white/5">
+                                                {item.accepted || isAlreadyInCircle ? (
+                                                    <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-bold bg-emerald-500/15 px-2.5 py-1 rounded-full border border-emerald-500/30">
+                                                        <Check size={12} /> Connected in Guard Circle
+                                                    </span>
+                                                ) : item.declined ? (
+                                                    <span className="text-[11px] text-text-3 italic">Invitation declined</span>
+                                                ) : (
+                                                    <>
+                                                        <button
+                                                            onClick={(e) => handleAcceptCircleInvite(e, item)}
+                                                            className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
+                                                        >
+                                                            <Check size={14} /> Accept Invite
+                                                        </button>
+                                                        <button
+                                                            onClick={(e) => handleDeclineCircleInvite(e, item)}
+                                                            className="px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-95 text-zinc-300 text-xs font-medium rounded-xl flex items-center gap-1 transition-all border border-white/10"
+                                                        >
+                                                            <X size={14} /> Decline
+                                                        </button>
+                                                    </>
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             </div>
                         </div>
