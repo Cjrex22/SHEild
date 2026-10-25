@@ -38,3 +38,4 @@ sheild-frontend/*.local
 sheild-frontend/users.json
 tmp/
 temp/
+.firebase/

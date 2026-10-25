@@ -24,12 +24,26 @@ export default function CirclePage() {
 
     // Only members who have ACTUALLY accepted are in our active Guard Circle
     const connectedMembers = circleMembers.filter(member => {
-        return member.status === 'accepted' || member.accepted === true;
+        const isAccepted = member.status === 'accepted' || member.accepted === true;
+        if (!isAccepted) return false;
+
+        // If there is an active, unaccepted incoming invite from this member, it needs acceptance first
+        const hasPendingIncoming = notifItems.some(item => {
+            const isInvite = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
+            if (!isInvite || item.declined || item.accepted) return false;
+            return (item.fromUid && item.fromUid === member.uid) || 
+                   (item.fromUsername && member.username && item.fromUsername.toLowerCase() === member.username.toLowerCase());
+        });
+        if (hasPendingIncoming) return false;
+
+        return true;
     });
 
     // Outgoing invitations sent by me that are still pending acceptance
     const sentPendingInvites = circleMembers.filter(member => {
-        return !connectedMembers.some(c => c.uid === member.uid);
+        const isConnected = connectedMembers.some(c => c.uid === member.uid);
+        if (isConnected) return false;
+        return member.role === 'inviter' || member.status === 'pending' || member.accepted === false;
     });
 
     // Incoming circle invites where I am the recipient, waiting for my acceptance or cancellation
@@ -37,12 +51,12 @@ export default function CirclePage() {
         const isInvite = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
         if (!isInvite || item.declined || item.accepted) return false;
 
-        // If I have already accepted and connected with this user, don't show incoming prompt
-        const alreadyConnected = connectedMembers.some(m => 
-            (item.fromUid && m.uid === item.fromUid) || 
-            (item.fromUsername && m.username && m.username.toLowerCase() === item.fromUsername.toLowerCase())
-        );
-        if (alreadyConnected) return false;
+        // Don't show if this notification was sent by myself
+        if (item.fromUid && profile?.uid && item.fromUid === profile.uid) return false;
+
+        // If I am the inviter for this user, it's an outgoing invite, not an incoming one
+        const myDocForSender = item.fromUid ? circleMembers.find(m => m.uid === item.fromUid) : null;
+        if (myDocForSender?.role === 'inviter') return false;
 
         return true;
     });
@@ -106,13 +120,18 @@ export default function CirclePage() {
         try {
             await api.post(`/circle/${targetUid}`);
             if (profile?.uid) {
+                // Set my record as inviter and pending
                 await setDoc(doc(db, 'users', profile.uid, 'guardCircleDetails', targetUid), {
                     uid: targetUid,
                     name: name,
                     status: 'pending',
+                    role: 'inviter',
                     accepted: false,
                     addedAt: new Date()
                 }, { merge: true }).catch(() => {});
+
+                // Purge any stale document in target user's guardCircleDetails for me
+                await deleteDoc(doc(db, 'users', targetUid, 'guardCircleDetails', profile.uid)).catch(() => {});
             }
             toast.success(`Invitation sent to ${name}`);
             setSearchTerm('');
@@ -126,7 +145,7 @@ export default function CirclePage() {
             await api.post(`/circle/${invite.fromUid}`);
             const uid = profile?.uid;
             if (uid) {
-                // Set my circle details for inviter as accepted
+                // Set my circle details for inviter as accepted (role: invitee)
                 await setDoc(doc(db, 'users', uid, 'guardCircleDetails', invite.fromUid), {
                     uid: invite.fromUid,
                     name: invite.fromName || '',
@@ -134,13 +153,19 @@ export default function CirclePage() {
                     avatarUrl: invite.fromAvatarUrl || '',
                     status: 'accepted',
                     accepted: true,
+                    role: 'invitee',
                     connectedAt: new Date()
                 }, { merge: true }).catch(() => {});
 
-                // Update inviter's circle document for me as accepted as well
+                // Update inviter's circle document for me as accepted as well (role: inviter)
                 await setDoc(doc(db, 'users', invite.fromUid, 'guardCircleDetails', uid), {
+                    uid: uid,
+                    name: profile?.name || '',
+                    username: profile?.username || '',
+                    avatarUrl: profile?.avatarUrl || '',
                     status: 'accepted',
                     accepted: true,
+                    role: 'inviter',
                     connectedAt: new Date()
                 }, { merge: true }).catch(() => {});
 
@@ -169,6 +194,7 @@ export default function CirclePage() {
                 if (invite.fromUid) {
                     await deleteDoc(doc(db, 'users', uid, 'guardCircleDetails', invite.fromUid)).catch(() => {});
                     await deleteDoc(doc(db, 'users', invite.fromUid, 'guardCircleDetails', uid)).catch(() => {});
+                    await api.delete(`/circle/${invite.fromUid}`).catch(() => {});
                 }
             }
             markAsRead(invite.id);
@@ -184,6 +210,7 @@ export default function CirclePage() {
             const uid = profile?.uid;
             if (uid) {
                 await deleteDoc(doc(db, 'users', uid, 'guardCircleDetails', targetUid)).catch(() => {});
+                await deleteDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid)).catch(() => {});
             }
             await api.delete(`/circle/${targetUid}`).catch(() => {});
             toast.success(`Invitation to ${name} cancelled`);
@@ -199,6 +226,7 @@ export default function CirclePage() {
             const uid = profile?.uid;
             if (uid) {
                 await deleteDoc(doc(db, 'users', uid, 'guardCircleDetails', targetUid)).catch(() => {});
+                await deleteDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid)).catch(() => {});
             }
             await api.delete(`/circle/${targetUid}`).catch(() => {});
             toast.success(`${name} removed from your Guard Circle`);

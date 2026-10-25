@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { X, CheckCircle2, ShieldAlert, MapPin, Users, Check, Trash2 } from 'lucide-react';
+import { X, CheckCircle2, ShieldAlert, MapPin, Users, Check, Trash2, Clock } from 'lucide-react';
 import { useNotificationStore, type NotificationItem } from '../stores/notificationStore';
+import { useAuthStore } from '../stores/authStore';
 import { api } from '../lib/api';
 import { auth, db } from '../lib/firebase';
 import { doc, setDoc, collection, onSnapshot, deleteDoc, writeBatch } from 'firebase/firestore';
@@ -14,27 +15,21 @@ interface Props {
 
 export default function NotificationPanel({ isOpen, onClose }: Props) {
     const { items, unreadCount, markAsRead, markAllAsRead, removeItem, clearAll } = useNotificationStore();
-    const [circleMemberUids, setCircleMemberUids] = useState<string[]>([]);
-    const [circleMemberUsernames, setCircleMemberUsernames] = useState<string[]>([]);
+    const [circleMemberRecords, setCircleMemberRecords] = useState<Record<string, any>>({});
     const [isClearing, setIsClearing] = useState(false);
 
     useEffect(() => {
         const uid = auth.currentUser?.uid;
         if (!uid) return;
         const unsub = onSnapshot(collection(db, 'users', uid, 'guardCircleDetails'), (snap) => {
-            const uids: string[] = [];
-            const usernames: string[] = [];
+            const records: Record<string, any> = {};
             snap.docs.forEach(d => {
                 const data = d.data();
-                // ONLY count as connected if explicitly accepted!
-                if (data.status === 'accepted' || data.accepted === true) {
-                    uids.push(d.id);
-                    if (data.uid) uids.push(data.uid);
-                    if (data.username) usernames.push(data.username.toLowerCase());
-                }
+                records[d.id] = data;
+                if (data.uid) records[data.uid] = data;
+                if (data.username) records[data.username.toLowerCase()] = data;
             });
-            setCircleMemberUids(Array.from(new Set(uids)));
-            setCircleMemberUsernames(Array.from(new Set(usernames)));
+            setCircleMemberRecords(records);
         });
         return unsub;
     }, []);
@@ -58,8 +53,9 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
 
             await api.post(`/circle/${targetUid}`);
             const uid = auth.currentUser?.uid;
+            const currentUser = useAuthStore.getState().profile;
             if (uid) {
-                // Set my circle details for inviter as accepted
+                // Set my circle details for inviter as accepted (role: invitee)
                 await setDoc(doc(db, 'users', uid, 'guardCircleDetails', targetUid), {
                     uid: targetUid,
                     name: item.fromName || '',
@@ -67,13 +63,19 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                     avatarUrl: item.fromAvatarUrl || '',
                     status: 'accepted',
                     accepted: true,
+                    role: 'invitee',
                     connectedAt: new Date()
                 }, { merge: true }).catch(() => {});
 
-                // Also update the inviter's circle document for this user to accepted
+                // Also update the inviter's circle document for me as accepted (role: inviter)
                 await setDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid), {
+                    uid: uid,
+                    name: currentUser?.name || '',
+                    username: currentUser?.username || '',
+                    avatarUrl: currentUser?.avatarUrl || '',
                     status: 'accepted',
                     accepted: true,
+                    role: 'inviter',
                     connectedAt: new Date()
                 }, { merge: true }).catch(() => {});
 
@@ -100,10 +102,11 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                     declined: true
                 }, { merge: true }).catch(() => {});
 
-                // Clean up any pending records in guardCircleDetails
+                // Clean up any pending records in guardCircleDetails from both sides
                 if (item.fromUid) {
                     await deleteDoc(doc(db, 'users', uid, 'guardCircleDetails', item.fromUid)).catch(() => {});
                     await deleteDoc(doc(db, 'users', item.fromUid, 'guardCircleDetails', uid)).catch(() => {});
+                    await api.delete(`/circle/${item.fromUid}`).catch(() => {});
                 }
             }
             markAsRead(item.id);
@@ -303,10 +306,12 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                                     )}
 
                                     {(item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'))) && (() => {
-                                        const isConnected = 
-                                            item.accepted === true ||
-                                            (item.fromUid && circleMemberUids.includes(item.fromUid)) ||
-                                            (item.fromUsername && circleMemberUsernames.includes(item.fromUsername.toLowerCase()));
+                                        const senderRecord = (item.fromUid && circleMemberRecords[item.fromUid]) || 
+                                                             (item.fromUsername && circleMemberRecords[item.fromUsername.toLowerCase()]);
+
+                                        const isInviterPending = senderRecord?.role === 'inviter' && (senderRecord?.status === 'pending' || senderRecord?.accepted === false);
+                                        const isCurrentlyAccepted = senderRecord && (senderRecord.status === 'accepted' || senderRecord.accepted === true);
+                                        const isConnected = (item.accepted === true || isCurrentlyAccepted) && !isInviterPending;
 
                                         return (
                                             <div className="mt-3 flex items-center gap-2 pt-2.5 border-t border-white/5">
@@ -316,6 +321,10 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                                                     </span>
                                                 ) : item.declined ? (
                                                     <span className="text-[11px] text-text-3 italic">Invitation declined</span>
+                                                ) : isInviterPending ? (
+                                                    <span className="inline-flex items-center gap-1 text-[11px] text-amber-400 font-medium bg-amber-500/15 px-2.5 py-1 rounded-full border border-amber-500/30">
+                                                        <Clock size={12} /> Invitation sent · Waiting for acceptance
+                                                    </span>
                                                 ) : (
                                                     <>
                                                         <button
