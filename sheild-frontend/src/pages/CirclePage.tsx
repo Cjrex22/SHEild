@@ -1,24 +1,38 @@
 import { useState, useEffect } from 'react';
 import { 
     ArrowLeft, Search, Users as UsersIcon, MoreVertical, 
-    ShieldAlert, Check, Clock, XCircle, UserMinus 
+    ShieldAlert, Check, Clock, XCircle, UserMinus, X 
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
+import { useNotificationStore, type NotificationItem } from '../stores/notificationStore';
 import { api } from '../lib/api';
 import { db } from '../lib/firebase';
-import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, updateDoc, setDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
 export default function CirclePage() {
     const navigate = useNavigate();
     const { profile } = useAuthStore();
+    const { items: notifItems, markAsRead } = useNotificationStore();
     const [searchTerm, setSearchTerm] = useState('');
     const [searchResults, setSearchResults] = useState<any[]>([]);
     const [circleMembers, setCircleMembers] = useState<any[]>([]);
     const [liveUserData, setLiveUserData] = useState<Record<string, any>>({});
     const [loading, setLoading] = useState(false);
     const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+
+    // Incoming circle invites that haven't been accepted or declined yet
+    const pendingInvites = notifItems.filter(item => 
+        item.type === 'circle_add' && 
+        !item.declined && 
+        !item.accepted &&
+        !circleMembers.some(m => m.uid === item.fromUid && (
+            m.status === 'accepted' || 
+            m.accepted === true || 
+            (Array.isArray(liveUserData[m.uid]?.guardCircle) && !!profile?.uid && liveUserData[m.uid].guardCircle.includes(profile.uid))
+        ))
+    );
 
     useEffect(() => {
         if (!profile?.uid) return;
@@ -80,6 +94,42 @@ export default function CirclePage() {
             setSearchTerm('');
         } catch (e) {
             toast.error('Failed to send invitation');
+        }
+    };
+
+    const handleAcceptIncomingInvite = async (invite: NotificationItem) => {
+        try {
+            await api.post(`/circle/${invite.fromUid}`);
+            if (profile?.uid) {
+                await setDoc(doc(db, 'users', profile.uid, 'guardCircleDetails', invite.fromUid), {
+                    status: 'accepted',
+                    accepted: true
+                }, { merge: true }).catch(() => {});
+
+                await setDoc(doc(db, 'notifications', profile.uid, 'items', invite.id), {
+                    read: true,
+                    accepted: true
+                }, { merge: true }).catch(() => {});
+            }
+            markAsRead(invite.id);
+            toast.success(`Connected with ${invite.fromName || 'guardian'}!`);
+        } catch (e) {
+            toast.error('Failed to accept invitation');
+        }
+    };
+
+    const handleDeclineIncomingInvite = async (invite: NotificationItem) => {
+        try {
+            if (profile?.uid) {
+                await setDoc(doc(db, 'notifications', profile.uid, 'items', invite.id), {
+                    read: true,
+                    declined: true
+                }, { merge: true }).catch(() => {});
+            }
+            markAsRead(invite.id);
+            toast.success('Invitation declined');
+        } catch (e) {
+            toast.error('Failed to decline invitation');
         }
     };
 
@@ -181,6 +231,53 @@ export default function CirclePage() {
                     )}
                 </div>
 
+                {pendingInvites.length > 0 && (
+                    <section className="mt-2 mb-6">
+                        <div className="flex items-center justify-between mb-3 px-1">
+                            <h2 className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                                <Clock size={14} className="text-amber-400" /> Pending Invitations ({pendingInvites.length})
+                            </h2>
+                            <span className="text-[11px] text-text-3">Action required</span>
+                        </div>
+
+                        <div className="flex flex-col gap-2.5">
+                            {pendingInvites.map((invite) => (
+                                <div key={invite.id} className="bg-surface border border-amber-500/30 rounded-2xl p-3.5 shadow-card flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-3 min-w-0">
+                                        <div className="w-10 h-10 rounded-full bg-surface-3 flex items-center justify-center overflow-hidden shrink-0 border border-white/10 text-white font-bold text-sm">
+                                            {invite.fromAvatarUrl ? (
+                                                <img src={invite.fromAvatarUrl} alt="" className="w-full h-full object-cover" />
+                                            ) : (
+                                                <span>{(invite.fromName || 'U').charAt(0)}</span>
+                                            )}
+                                        </div>
+                                        <div className="min-w-0">
+                                            <p className="font-bold text-white text-sm truncate">{invite.fromName}</p>
+                                            <p className="text-xs text-text-3 truncate">@{invite.fromUsername}</p>
+                                            <p className="text-[11px] text-amber-400/90 mt-0.5">Invited you to Guard Circle</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        <button
+                                            onClick={() => handleAcceptIncomingInvite(invite)}
+                                            className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
+                                        >
+                                            <Check size={14} /> Accept
+                                        </button>
+                                        <button
+                                            onClick={() => handleDeclineIncomingInvite(invite)}
+                                            className="px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-95 text-zinc-300 text-xs font-medium rounded-xl flex items-center gap-1 transition-all border border-white/10"
+                                        >
+                                            <X size={14} /> Decline
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                )}
+
                 <section className="mt-2">
                     <h2 className="text-xs font-bold uppercase tracking-wider text-text-3 mb-4">My Guard Circle</h2>
 
@@ -197,8 +294,11 @@ export default function CirclePage() {
                     ) : (
                         <div className="flex flex-col gap-3">
                             {circleMembers.map(member => {
-                                const isAccepted = member.status === 'accepted' || member.accepted === true;
                                 const liveInfo = liveUserData[member.uid];
+                                const isAccepted = 
+                                    member.status === 'accepted' || 
+                                    member.accepted === true || 
+                                    (Array.isArray(liveInfo?.guardCircle) && !!profile?.uid && liveInfo.guardCircle.includes(profile.uid));
                                 const displayUsername = liveInfo?.username || member.username;
                                 const displayName = liveInfo?.name || member.name;
                                 const displayAvatar = liveInfo?.avatarUrl || member.avatarUrl;

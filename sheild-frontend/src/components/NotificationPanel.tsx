@@ -1,6 +1,8 @@
-import { X, CheckCircle2, ShieldAlert, MapPin, Users } from 'lucide-react';
+import { X, CheckCircle2, ShieldAlert, MapPin, Users, Check } from 'lucide-react';
 import { useNotificationStore, type NotificationItem } from '../stores/notificationStore';
 import { api } from '../lib/api';
+import { auth, db } from '../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { formatLocationName } from '../lib/locationHelper';
 
@@ -11,6 +13,46 @@ interface Props {
 
 export default function NotificationPanel({ isOpen, onClose }: Props) {
     const { items, unreadCount, markAsRead, markAllAsRead } = useNotificationStore();
+
+    const handleAcceptCircleInvite = async (e: React.MouseEvent, item: NotificationItem) => {
+        e.stopPropagation();
+        try {
+            await api.post(`/circle/${item.fromUid}`);
+            const uid = auth.currentUser?.uid;
+            if (uid) {
+                await setDoc(doc(db, 'users', uid, 'guardCircleDetails', item.fromUid), {
+                    status: 'accepted',
+                    accepted: true
+                }, { merge: true }).catch(() => {});
+
+                await setDoc(doc(db, 'notifications', uid, 'items', item.id), {
+                    read: true,
+                    accepted: true
+                }, { merge: true }).catch(() => {});
+            }
+            markAsRead(item.id);
+            toast.success(`You and ${item.fromName || 'guardian'} are now connected!`);
+        } catch (error) {
+            toast.error('Failed to accept invitation');
+        }
+    };
+
+    const handleDeclineCircleInvite = async (e: React.MouseEvent, item: NotificationItem) => {
+        e.stopPropagation();
+        try {
+            const uid = auth.currentUser?.uid;
+            if (uid) {
+                await setDoc(doc(db, 'notifications', uid, 'items', item.id), {
+                    read: true,
+                    declined: true
+                }, { merge: true }).catch(() => {});
+            }
+            markAsRead(item.id);
+            toast.success('Invitation declined');
+        } catch (error) {
+            toast.error('Failed to decline invitation');
+        }
+    };
 
     const handleRead = async (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
@@ -118,6 +160,33 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                                                 </button>
                                             ) : (
                                                 <p className="text-text-2"><MapPin size={12} className="inline mr-1 opacity-70"/>{formatLocationName(item.locationName)}</p>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {item.type === 'circle_add' && (
+                                        <div className="mt-3 flex items-center gap-2 pt-2.5 border-t border-white/5">
+                                            {item.accepted ? (
+                                                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-bold bg-emerald-500/15 px-2.5 py-1 rounded-full border border-emerald-500/30">
+                                                    <Check size={12} /> Connected in Circle
+                                                </span>
+                                            ) : item.declined ? (
+                                                <span className="text-[11px] text-text-3 italic">Invitation declined</span>
+                                            ) : (
+                                                <>
+                                                    <button
+                                                        onClick={(e) => handleAcceptCircleInvite(e, item)}
+                                                        className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
+                                                    >
+                                                        <Check size={14} /> Accept Invite
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => handleDeclineCircleInvite(e, item)}
+                                                        className="px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-95 text-zinc-300 text-xs font-medium rounded-xl flex items-center gap-1 transition-all border border-white/10"
+                                                    >
+                                                        <X size={14} /> Decline
+                                                    </button>
+                                                </>
                                             )}
                                         </div>
                                     )}

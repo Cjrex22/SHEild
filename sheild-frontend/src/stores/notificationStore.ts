@@ -14,6 +14,8 @@ export interface NotificationItem {
     mapsLink?: string;
     read: boolean;
     createdAt: any;
+    accepted?: boolean;
+    declined?: boolean;
 }
 
 interface NotifState {
