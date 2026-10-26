@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, Component, type ReactNode, type ErrorInfo } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { auth } from './lib/firebase';
@@ -27,6 +27,55 @@ import MapPage from './pages/MapPage';
 import SettingsPage from './pages/SettingsPage';
 import BottomNav from './components/BottomNav';
 import SafeZonesPage from './pages/SafeZonesPage';
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+}
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): ErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('SHEild ErrorBoundary caught error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-bg flex flex-col items-center justify-center p-6 text-center text-white">
+          <div className="w-16 h-16 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center mb-4 text-primary">
+            <span className="text-2xl font-bold">!</span>
+          </div>
+          <h2 className="text-xl font-bold mb-2">Something went wrong</h2>
+          <p className="text-sm text-text-3 max-w-xs mb-6">
+            An unexpected error occurred while loading this view. Tap below to reload.
+          </p>
+          <button
+            onClick={() => {
+              this.setState({ hasError: false });
+              window.location.reload();
+            }}
+            className="px-6 py-2.5 rounded-full bg-primary hover:bg-primary-hover active:scale-95 text-white font-bold text-sm shadow-sos transition-all"
+          >
+            Reload Page
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
@@ -218,23 +267,25 @@ function App() {
           border: '1px solid var(--c-border)',
         }
       }} />
-      <Routes>
-        <Route path="/" element={<Navigate to="/auth/welcome" replace />} />
+      <ErrorBoundary>
+        <Routes>
+          <Route path="/" element={<Navigate to="/auth/welcome" replace />} />
 
-        {/* Auth Routes */}
-        <Route path="/auth/welcome" element={<AuthRoute><WelcomePage /></AuthRoute>} />
-        <Route path="/auth/signup" element={<AuthRoute><SignUpPage /></AuthRoute>} />
-        <Route path="/auth/profile-setup" element={<ProtectedRoute><ProfileSetupPage /></ProtectedRoute>} />
-        <Route path="/auth/signin" element={<AuthRoute><SignInPage /></AuthRoute>} />
-        <Route path="/auth/forgot-password" element={<AuthRoute><ForgotPasswordPage /></AuthRoute>} />
+          {/* Auth Routes */}
+          <Route path="/auth/welcome" element={<AuthRoute><WelcomePage /></AuthRoute>} />
+          <Route path="/auth/signup" element={<AuthRoute><SignUpPage /></AuthRoute>} />
+          <Route path="/auth/profile-setup" element={<ProtectedRoute><ProfileSetupPage /></ProtectedRoute>} />
+          <Route path="/auth/signin" element={<AuthRoute><SignInPage /></AuthRoute>} />
+          <Route path="/auth/forgot-password" element={<AuthRoute><ForgotPasswordPage /></AuthRoute>} />
 
-        {/* Protected Routes */}
-        <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-        <Route path="/circle" element={<ProtectedRoute><CirclePage /></ProtectedRoute>} />
-        <Route path="/map" element={<ProtectedRoute><MapPage /></ProtectedRoute>} />
-        <Route path="/safe-zones" element={<ProtectedRoute><SafeZonesPage /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
-      </Routes>
+          {/* Protected Routes */}
+          <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+          <Route path="/circle" element={<ProtectedRoute><CirclePage /></ProtectedRoute>} />
+          <Route path="/map" element={<ProtectedRoute><MapPage /></ProtectedRoute>} />
+          <Route path="/safe-zones" element={<ProtectedRoute><SafeZonesPage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+        </Routes>
+      </ErrorBoundary>
       <BottomNav />
 
       {/* Shake-to-SOS Confirmation Overlay — always in tree, portal-rendered */}

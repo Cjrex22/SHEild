@@ -25,12 +25,13 @@ export default function CirclePage() {
 
     // Only members who have ACTUALLY accepted are in our active Guard Circle
     const connectedMembers = circleMembers.filter(member => {
+        if (!member || !member.uid) return false;
         const liveInfo = liveUserData[member.uid];
         const isMutualInBackend = Array.isArray(liveInfo?.guardCircle) && !!profile?.uid && liveInfo.guardCircle.includes(profile.uid);
         const hasAcceptedNotifFromMember = notifItems.some(item => 
-            (item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'))) &&
+            (item.type === 'circle_add' || item.type === 'circle' || (typeof item.message === 'string' && item.message.toLowerCase().includes('guard circle'))) &&
             ((item.fromUid && item.fromUid === member.uid) || 
-             (item.fromUsername && member.username && item.fromUsername.toLowerCase() === member.username.toLowerCase()))
+             (typeof item.fromUsername === 'string' && typeof member.username === 'string' && item.fromUsername.toLowerCase() === member.username.toLowerCase()))
         );
 
         return member.status === 'accepted' || member.accepted === true || isMutualInBackend || hasAcceptedNotifFromMember;
@@ -38,6 +39,7 @@ export default function CirclePage() {
 
     // Outgoing invitations sent by me that are still pending acceptance
     const sentPendingInvites = circleMembers.filter(member => {
+        if (!member || !member.uid) return false;
         const isConnected = connectedMembers.some(c => c.uid === member.uid);
         if (isConnected) return false;
         return member.role === 'inviter' || member.status === 'pending' || member.accepted === false;
@@ -45,7 +47,7 @@ export default function CirclePage() {
 
     // Incoming circle invites where I am the recipient, waiting for my acceptance or cancellation
     const pendingInvites = isCircleLoading ? [] : notifItems.filter(item => {
-        const isInvite = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
+        const isInvite = item.type === 'circle_add' || item.type === 'circle' || (typeof item.message === 'string' && item.message.toLowerCase().includes('guard circle'));
         if (!isInvite || item.declined || item.accepted) return false;
 
         // Don't show if this notification was sent by myself
@@ -54,14 +56,14 @@ export default function CirclePage() {
         // If I am already connected with this user, don't show incoming prompt
         const isAlreadyConnected = connectedMembers.some(m => 
             (item.fromUid && m.uid === item.fromUid) || 
-            (item.fromUsername && m.username && m.username.toLowerCase() === item.fromUsername.toLowerCase())
+            (typeof item.fromUsername === 'string' && typeof m.username === 'string' && m.username.toLowerCase() === item.fromUsername.toLowerCase())
         );
         if (isAlreadyConnected) return false;
 
         // If this sender is already in my circle details (e.g. I already invited/added them), NEVER prompt me to accept!
         const existingMember = circleMembers.find(m => 
             (item.fromUid && m.uid === item.fromUid) || 
-            (item.fromUsername && m.username && m.username.toLowerCase() === item.fromUsername.toLowerCase())
+            (typeof item.fromUsername === 'string' && typeof m.username === 'string' && m.username.toLowerCase() === item.fromUsername.toLowerCase())
         );
         if (existingMember) return false;
 
@@ -72,41 +74,6 @@ export default function CirclePage() {
 
         return true;
     });
-
-    // Whenever a member in our circle details has accepted (or sent circle_add notification),
-    // ensure their Firestore document and notification are permanently saved as accepted!
-    useEffect(() => {
-        if (!profile?.uid || circleMembers.length === 0 || notifItems.length === 0) return;
-
-        notifItems.forEach(item => {
-            const isCircleNotif = item.type === 'circle_add' || item.type === 'circle' || (item.message && item.message.toLowerCase().includes('guard circle'));
-            if (!isCircleNotif) return;
-
-            const member = circleMembers.find(m => 
-                (item.fromUid && m.uid === item.fromUid) || 
-                (item.fromUsername && m.username && m.username.toLowerCase() === item.fromUsername.toLowerCase())
-            );
-
-            if (member) {
-                // If the notification hasn't been marked accepted in Firestore yet, mark it now
-                if (!item.accepted) {
-                    setDoc(doc(db, 'notifications', profile.uid, 'items', item.id), {
-                        accepted: true,
-                        read: true
-                    }, { merge: true }).catch(() => {});
-                }
-
-                // If our local member record hasn't been marked accepted in Firestore yet, mark it now
-                if (member.status !== 'accepted' || !member.accepted) {
-                    setDoc(doc(db, 'users', profile.uid, 'guardCircleDetails', member.uid), {
-                        status: 'accepted',
-                        accepted: true,
-                        connectedAt: new Date()
-                    }, { merge: true }).catch(() => {});
-                }
-            }
-        });
-    }, [circleMembers, notifItems, profile?.uid]);
 
     useEffect(() => {
         if (!profile?.uid) return;
@@ -127,39 +94,23 @@ export default function CirclePage() {
     }, [profile?.uid]);
 
     // Live subscription to each member's user profile so username changes and circle status are immediately reflected
+    const memberUidsKey = circleMembers.map(m => m.uid).filter(Boolean).sort().join(',');
+
     useEffect(() => {
-        if (circleMembers.length === 0 || !profile?.uid) return;
-        const unsubs = circleMembers.map(member => {
-            if (!member.uid) return () => {};
-            return onSnapshot(doc(db, 'users', member.uid), (snap) => {
+        if (!memberUidsKey || !profile?.uid) return;
+        const uids = memberUidsKey.split(',');
+        const unsubs = uids.map(targetUid => {
+            return onSnapshot(doc(db, 'users', targetUid), (snap) => {
                 if (snap.exists()) {
                     const data = snap.data();
-                    setLiveUserData(prev => ({ ...prev, [member.uid]: data }));
-
-                    const updates: any = {};
-                    if (data.username && data.username !== member.username) {
-                        updates.username = data.username;
-                        updates.name = data.name || member.name;
-                        updates.avatarUrl = data.avatarUrl || member.avatarUrl || '';
-                    }
-
-                    // If the other user has added me in backend guardCircle, ensure local record is accepted!
-                    if (Array.isArray(data.guardCircle) && profile?.uid && data.guardCircle.includes(profile.uid)) {
-                        if (member.status !== 'accepted' || !member.accepted) {
-                            updates.status = 'accepted';
-                            updates.accepted = true;
-                            updates.connectedAt = new Date();
-                        }
-                    }
-
-                    if (Object.keys(updates).length > 0) {
-                        setDoc(doc(db, 'users', profile.uid, 'guardCircleDetails', member.uid), updates, { merge: true }).catch(() => {});
-                    }
+                    setLiveUserData(prev => ({ ...prev, [targetUid]: data }));
                 }
+            }, (err) => {
+                console.warn('Error listening to user profile', targetUid, err);
             });
         });
         return () => unsubs.forEach(u => u());
-    }, [circleMembers, profile?.uid]);
+    }, [memberUidsKey, profile?.uid]);
 
     useEffect(() => {
         const timer = setTimeout(async () => {
@@ -283,7 +234,7 @@ export default function CirclePage() {
     };
 
     const handleCancelInvite = async (targetUid: string, name: string) => {
-        if (!window.confirm(`Cancel invitation sent to ${name}?`)) return;
+        if (!window.confirm(`Cancel invitation sent to ${name || 'this user'}?`)) return;
         try {
             const uid = profile?.uid;
             if (uid) {
@@ -291,7 +242,7 @@ export default function CirclePage() {
                 await deleteDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid)).catch(() => {});
             }
             await api.delete(`/circle/${targetUid}`).catch(() => {});
-            toast.success(`Invitation to ${name} cancelled`);
+            toast.success(`Invitation to ${name || 'user'} cancelled`);
             setActiveDropdown(null);
         } catch (e) {
             toast.error('Failed to cancel invitation');
@@ -299,7 +250,7 @@ export default function CirclePage() {
     };
 
     const handleRemove = async (targetUid: string, name: string) => {
-        if (!window.confirm(`Remove ${name}? They will no longer receive your emergency alerts.`)) return;
+        if (!window.confirm(`Remove ${name || 'this guardian'}? They will no longer receive your emergency alerts.`)) return;
         try {
             const uid = profile?.uid;
             if (uid) {
@@ -307,7 +258,7 @@ export default function CirclePage() {
                 await deleteDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid)).catch(() => {});
             }
             await api.delete(`/circle/${targetUid}`).catch(() => {});
-            toast.success(`${name} removed from your Guard Circle`);
+            toast.success(`${name || 'Guardian'} removed from your Guard Circle`);
             setActiveDropdown(null);
         } catch (e) {
             toast.error('Failed to remove connection');
@@ -367,11 +318,11 @@ export default function CirclePage() {
                                         <div key={user.uid} className="flex items-center justify-between p-3.5 border-b border-white/5 last:border-0 hover:bg-surface-2 transition-colors">
                                             <div className="flex items-center gap-3">
                                                 <div className="w-10 h-10 rounded-full bg-surface-3 flex items-center justify-center overflow-hidden shrink-0 border border-white/10" style={{ backgroundColor: user.avatarColor }}>
-                                                    {user.avatarUrl ? <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" /> : <span className="text-white font-bold">{user.name.charAt(0)}</span>}
+                                                    {user.avatarUrl ? <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" /> : <span className="text-white font-bold">{(user.name || user.username || 'U').charAt(0).toUpperCase()}</span>}
                                                 </div>
                                                 <div>
-                                                    <p className="font-bold text-white text-sm">{user.name}</p>
-                                                    <p className="text-xs text-text-3">@{user.username}</p>
+                                                    <p className="font-bold text-white text-sm">{user.name || user.username || 'User'}</p>
+                                                    <p className="text-xs text-text-3">@{user.username || 'user'}</p>
                                                 </div>
                                             </div>
                                             {isConnected ? (
@@ -412,12 +363,12 @@ export default function CirclePage() {
                                             {invite.fromAvatarUrl ? (
                                                 <img src={invite.fromAvatarUrl} alt="" className="w-full h-full object-cover" />
                                             ) : (
-                                                <span>{(invite.fromName || 'U').charAt(0)}</span>
+                                                <span>{(invite.fromName || invite.fromUsername || 'U').charAt(0).toUpperCase()}</span>
                                             )}
                                         </div>
                                         <div className="min-w-0">
-                                            <p className="font-bold text-white text-sm truncate">{invite.fromName}</p>
-                                            <p className="text-xs text-text-3 truncate">@{invite.fromUsername}</p>
+                                            <p className="font-bold text-white text-sm truncate">{invite.fromName || invite.fromUsername || 'Guardian'}</p>
+                                            <p className="text-xs text-text-3 truncate">@{invite.fromUsername || 'user'}</p>
                                             <p className="text-[11px] text-amber-400/90 mt-0.5">Invited you to Guard Circle</p>
                                         </div>
                                     </div>
@@ -464,12 +415,12 @@ export default function CirclePage() {
                                                 {displayAvatar ? (
                                                     <img src={displayAvatar} alt="" className="w-full h-full object-cover" />
                                                 ) : (
-                                                    <span>{(displayName || 'U').charAt(0)}</span>
+                                                    <span>{(displayName || displayUsername || 'U').charAt(0).toUpperCase()}</span>
                                                 )}
                                             </div>
                                             <div className="min-w-0">
-                                                <p className="font-bold text-white text-sm truncate">{displayName}</p>
-                                                <p className="text-xs text-text-3 truncate">@{displayUsername}</p>
+                                                <p className="font-bold text-white text-sm truncate">{displayName || displayUsername || 'Guardian'}</p>
+                                                <p className="text-xs text-text-3 truncate">@{displayUsername || 'user'}</p>
                                                 <p className="text-[11px] text-amber-400/90 mt-0.5 flex items-center gap-1">
                                                     <Clock size={10} /> Pending acceptance
                                                 </p>
@@ -523,16 +474,16 @@ export default function CirclePage() {
                                     <div key={member.uid} className="bg-surface border border-white/10 rounded-2xl p-3.5 flex items-center justify-between shadow-card hover:border-white/20 transition-all relative">
                                         <div className="flex items-center gap-3 min-w-0">
                                             <div className="w-11 h-11 rounded-full bg-surface-3 flex items-center justify-center overflow-hidden shrink-0 shadow-sm border border-white/10" style={{ backgroundColor: member.avatarColor }}>
-                                                {displayAvatar ? <img src={displayAvatar} alt="" className="w-full h-full object-cover" /> : <span className="text-white font-bold text-base">{displayName.charAt(0)}</span>}
+                                                {displayAvatar ? <img src={displayAvatar} alt="" className="w-full h-full object-cover" /> : <span className="text-white font-bold text-base">{(displayName || displayUsername || 'U').charAt(0).toUpperCase()}</span>}
                                             </div>
                                             <div className="min-w-0">
                                                 <div className="flex items-center gap-2 flex-wrap">
-                                                    <p className="font-bold text-white text-sm leading-tight truncate">{displayName}</p>
+                                                    <p className="font-bold text-white text-sm leading-tight truncate">{displayName || displayUsername || 'Guardian'}</p>
                                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 whitespace-nowrap">
                                                         <Check size={10} /> Connected
                                                     </span>
                                                 </div>
-                                                <p className="text-xs text-text-3 mt-1 truncate">@{displayUsername}</p>
+                                                <p className="text-xs text-text-3 mt-1 truncate">@{displayUsername || 'user'}</p>
                                             </div>
                                         </div>
 
@@ -550,7 +501,7 @@ export default function CirclePage() {
                                                     <div className="fixed inset-0 z-30" onClick={() => setActiveDropdown(null)} />
                                                     <div className="absolute right-0 top-10 w-52 bg-surface-2 border border-white/10 shadow-card rounded-2xl py-1.5 z-40 overflow-hidden backdrop-blur-xl">
                                                         <button 
-                                                            onClick={() => handleRemove(member.uid, displayName)} 
+                                                            onClick={() => handleRemove(member.uid, displayName || displayUsername || 'Guardian')} 
                                                             className="w-full text-left px-4 py-2.5 text-xs text-red-400 hover:bg-white/5 transition-colors flex items-center gap-2.5 font-medium"
                                                         >
                                                             <UserMinus size={15} />
