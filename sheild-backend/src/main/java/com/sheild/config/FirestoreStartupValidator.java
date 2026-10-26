@@ -22,27 +22,44 @@ public class FirestoreStartupValidator implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        System.out.println("[Startup] Verifying Firestore connectivity...");
-        try {
-            // Write a small heartbeat document, then clean it up.
-            // This proves both WRITE and connection auth work end-to-end.
-            var ref = firestore.collection("_health").document("startup-check");
-            ref.set(Map.of(
-                "ts",      System.currentTimeMillis(),
-                "service", "sheild-backend"
-            )).get(10, TimeUnit.SECONDS);
-            ref.delete().get(5, TimeUnit.SECONDS);
+        // Run in background thread so cold-start TLS/OAuth handshakes don't block Tomcat or trigger false timeouts
+        Thread validatorThread = new Thread(() -> {
+            System.out.println("[Startup] Verifying Firestore connectivity...");
+            int maxAttempts = 3;
+            long[] timeoutsSeconds = { 30, 20, 15 };
 
-            System.out.println("[Startup] ✅ Firestore connection verified — reads and writes are working.");
-        } catch (Exception e) {
-            // Log clearly but don't kill the process — the health endpoint will expose this.
-            System.err.println(
-                "[Startup] ❌ CRITICAL: Cannot connect to Firestore! " +
-                "All user data operations will fail with 503. " +
-                "→ Fix: ensure FIREBASE_SERVICE_ACCOUNT_KEY_JSON is correctly set on Render " +
-                "and the service account has 'Cloud Datastore User' or 'Firebase Admin' IAM role. " +
-                "Error: " + e.getMessage()
-            );
-        }
+            for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    long timeout = timeoutsSeconds[attempt - 1];
+                    var ref = firestore.collection("_health").document("startup-check");
+                    ref.set(Map.of(
+                        "ts",      System.currentTimeMillis(),
+                        "service", "sheild-backend"
+                    )).get(timeout, TimeUnit.SECONDS);
+                    ref.delete().get(5, TimeUnit.SECONDS);
+
+                    System.out.println("[Startup] ✅ Firestore connection verified — reads and writes are working (attempt " + attempt + ").");
+                    return;
+                } catch (Exception e) {
+                    if (attempt < maxAttempts) {
+                        System.out.println("[Startup] ⏳ Warming up Firestore gRPC channel (attempt " + attempt + " timed out, retrying in 3s)...");
+                        try {
+                            Thread.sleep(3000);
+                        } catch (InterruptedException ignored) {}
+                    } else {
+                        System.err.println(
+                            "[Startup] ❌ CRITICAL: Cannot connect to Firestore after " + maxAttempts + " attempts! " +
+                            "All user data operations will fail with 503. " +
+                            "→ Fix: ensure FIREBASE_SERVICE_ACCOUNT_KEY_JSON is correctly set on Render " +
+                            "and the service account has 'Cloud Datastore User' or 'Firebase Admin' IAM role. " +
+                            "Error: " + e.getMessage()
+                        );
+                    }
+                }
+            }
+        }, "firestore-startup-validator");
+
+        validatorThread.setDaemon(true);
+        validatorThread.start();
     }
 }
