@@ -85,7 +85,7 @@ public class GuardCircleController {
             // Send FCM push notification to the invited user if they have a registered token
             String fcmToken = targetDoc.getString("fcmToken");
             if (fcmToken != null && !fcmToken.isEmpty()) {
-                String pushTitle = "Guard Circle Invite";
+                String pushTitle = "👥 Guard Circle Invite: " + (senderName != null ? senderName : "Guardian");
                 Map<String, String> data = new HashMap<>();
                 data.put("type", "circle_add");
                 data.put("fromUid", uid);

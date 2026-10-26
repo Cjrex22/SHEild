@@ -14,18 +14,16 @@ const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
   const type = payload.data?.type || '';
-  const title = payload.notification?.title || getTitleByType(type);
-  const body = payload.notification?.body || payload.data?.body || 'You have a new notification.';
-
-  // Determine icon and badge based on type
-  let icon = '/sheild-pwa-192.png';
-  let badge = '/sheild-pwa-192.png';
+  const fromName = payload.data?.fromName || '';
+  
+  // Create stylized, high-contrast title & body for the service worker alert
+  const { title, body } = getFormattedNotification(type, fromName, payload);
 
   const notifOptions = {
     body: body,
-    icon: icon,
-    badge: badge,
-    vibrate: type === 'sos' ? [300, 100, 300, 100, 300] : [200, 100, 200],
+    icon: '/shield-logo.png',
+    badge: '/shield-badge.png',
+    vibrate: type === 'sos' ? [400, 150, 400, 150, 400] : [200, 100, 200],
     data: {
       type: type,
       url: getUrlByType(type),
@@ -33,20 +31,69 @@ messaging.onBackgroundMessage((payload) => {
     },
     requireInteraction: type === 'sos',
     tag: type === 'sos' ? 'sos-alert' : undefined,
-    renotify: type === 'sos'
+    renotify: type === 'sos',
+    actions: getActionsByType(type)
   };
 
   self.registration.showNotification(title, notifOptions);
 });
 
-function getTitleByType(type) {
+function getFormattedNotification(type, name, payload) {
+  const who = name || 'Guardian';
   switch (type) {
-    case 'sos': return '🚨 EMERGENCY ALERT';
-    case 'safe': return '✅ Safety Update';
-    case 'circle_add': return '👥 Guard Circle Invite';
-    case 'location': return '📍 Location Shared';
-    case 'bodyguard': return '🛡️ Safety Alert';
-    default: return '🛡️ SHEild Alert';
+    case 'sos':
+      return {
+        title: `🚨 EMERGENCY: ${who} in Danger!`,
+        body: payload.notification?.body || `${who} triggered Emergency SOS! Tap to open live tracking.`
+      };
+    case 'safe':
+      return {
+        title: `🛡️ SHEild Protection • All Clear`,
+        body: `${who} is confirmed safe. Emergency session resolved.`
+      };
+    case 'circle_add':
+      return {
+        title: `👥 Guard Circle Request`,
+        body: `${who} invited you to connect in their Guard Circle.`
+      };
+    case 'location':
+      return {
+        title: `📍 Live Location • ${who}`,
+        body: `${who} shared live GPS coordinates with you.`
+      };
+    case 'bodyguard':
+      return {
+        title: `🛡️ Digital Bodyguard Alert`,
+        body: `${who} activated protective safety watch.`
+      };
+    default:
+      return {
+        title: payload.notification?.title || '🛡️ SHEild Safety Alert',
+        body: payload.notification?.body || payload.data?.body || 'New safety update received.'
+      };
+  }
+}
+
+function getActionsByType(type) {
+  switch (type) {
+    case 'sos':
+      return [
+        { action: 'open_sos', title: '🚨 Open SOS' }
+      ];
+    case 'circle_add':
+      return [
+        { action: 'open_circle', title: '👥 View Circle' }
+      ];
+    case 'location':
+      return [
+        { action: 'open_map', title: '📍 View Map' }
+      ];
+    case 'safe':
+      return [
+        { action: 'open_dash', title: '🛡️ Open SHEild' }
+      ];
+    default:
+      return [];
   }
 }
 
@@ -64,7 +111,7 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      // Try to find an already-open window and navigate it
+      // Focus existing window or open a new one
       for (const client of clientList) {
         if ('focus' in client) {
           client.focus();
@@ -74,7 +121,6 @@ self.addEventListener('notificationclick', (event) => {
           return;
         }
       }
-      // No window open — open a new one
       return clients.openWindow(targetUrl);
     })
   );

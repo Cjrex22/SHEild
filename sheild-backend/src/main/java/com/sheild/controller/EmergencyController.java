@@ -100,19 +100,19 @@ public class EmergencyController {
         switch(type) {
             case "sos": 
                 message = "🚨 SOS Triggered! " + name + " is in danger.";
-                title = "EMERGENCY: " + name;
+                title = "🚨 EMERGENCY: " + name;
                 break;
             case "bodyguard":
                 message = name + " might be in danger. Stay alert.";
-                title = "Safety Alert: " + name;
+                title = "🛡️ Safety Alert: " + name;
                 break;
             case "safe":
-                message = name + " is now safe.";
-                title = name + " is Safe";
+                message = name + " is now safe and secure.";
+                title = name + " is Safe ✅";
                 break;
             case "location":
-                message = name + " shared their location with you";
-                title = "Location Shared";
+                message = name + " shared live location with you.";
+                title = "📍 Location Shared by " + name;
                 break;
             default: return;
         }
@@ -158,6 +158,7 @@ public class EmergencyController {
         Map<String, String> data = new HashMap<>();
         data.put("type", type);
         data.put("fromUid", uid);
+        data.put("fromName", name != null ? name : "");
         data.put("title", title);
         data.put("body", message);
         if (sessionId != null) data.put("sessionId", sessionId);
