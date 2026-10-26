@@ -89,9 +89,25 @@ public class EmergencyController {
     private void notifyGuardCircle(String uid, String type, Map<String, Object> location, String sessionId) throws Exception {
         var meDoc = firestore.collection("users").document(uid).get().get();
         @SuppressWarnings("unchecked")
-        List<String> circle = (List<String>) meDoc.get("guardCircle");
+        List<String> circleList = (List<String>) meDoc.get("guardCircle");
+        Set<String> circle = new HashSet<>();
+        if (circleList != null) {
+            circle.addAll(circleList);
+        }
+
+        // Also check guardCircleDetails subcollection for all accepted guardians
+        try {
+            var details = firestore.collection("users").document(uid).collection("guardCircleDetails").get().get();
+            for (var d : details.getDocuments()) {
+                String status = d.getString("status");
+                Boolean accepted = d.getBoolean("accepted");
+                if ("accepted".equalsIgnoreCase(status) || Boolean.TRUE.equals(accepted)) {
+                    circle.add(d.getId());
+                }
+            }
+        } catch (Exception ignored) {}
         
-        if (circle == null || circle.isEmpty()) return;
+        if (circle.isEmpty()) return;
         
         String rawName = meDoc.getString("name");
         String rawUsername = meDoc.getString("username");

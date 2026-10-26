@@ -35,7 +35,7 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
         return unsub;
     }, [currentUid]);
 
-    // Auto-heal circle notifications when sender is already part of our circle
+    // Keep notifications marked accepted if connection is already accepted
     useEffect(() => {
         if (!currentUid || items.length === 0) return;
 
@@ -45,27 +45,16 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
 
             const senderRecord = (item.fromUid && circleMemberRecords[item.fromUid]) || 
                                  (item.fromUsername && circleMemberRecords[item.fromUsername.toLowerCase()]);
-            const isMutualInProfile = item.fromUid && Array.isArray(profile?.guardCircle) && profile.guardCircle.includes(item.fromUid);
+            const isAlreadyAccepted = senderRecord && (senderRecord.status === 'accepted' || senderRecord.accepted === true);
 
-            if (senderRecord || isMutualInProfile) {
-                if (!item.accepted) {
-                    setDoc(doc(db, 'notifications', currentUid, 'items', item.id), {
-                        accepted: true,
-                        read: true
-                    }, { merge: true }).catch(() => {});
-                }
-
-                const targetMemberUid = item.fromUid || senderRecord?.uid;
-                if (targetMemberUid && (senderRecord?.status !== 'accepted' || !senderRecord?.accepted)) {
-                    setDoc(doc(db, 'users', currentUid, 'guardCircleDetails', targetMemberUid), {
-                        status: 'accepted',
-                        accepted: true,
-                        connectedAt: new Date()
-                    }, { merge: true }).catch(() => {});
-                }
+            if (isAlreadyAccepted && !item.accepted) {
+                setDoc(doc(db, 'notifications', currentUid, 'items', item.id), {
+                    accepted: true,
+                    read: true
+                }, { merge: true }).catch(() => {});
             }
         });
-    }, [items, circleMemberRecords, currentUid, profile?.guardCircle]);
+    }, [items, circleMemberRecords, currentUid]);
 
     const handleAcceptCircleInvite = async (e: React.MouseEvent, item: NotificationItem) => {
         e.stopPropagation();
@@ -84,7 +73,7 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                 return;
             }
 
-            await api.post(`/circle/${targetUid}`);
+            await api.post(`/circle/accept/${targetUid}`);
             const uid = currentUid;
             const currentUser = profile || useAuthStore.getState().profile;
             if (uid) {
@@ -118,6 +107,13 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                     accepted: true
                 }, { merge: true }).catch(() => {});
             }
+
+            const curProf = useAuthStore.getState().profile;
+            if (curProf) {
+                const updatedCircle = Array.from(new Set([...(curProf.guardCircle || []), targetUid]));
+                useAuthStore.getState().setProfile({ ...curProf, guardCircle: updatedCircle });
+            }
+
             markAsRead(item.id);
             toast.success(`You and ${item.fromName || 'guardian'} are now connected!`);
         } catch (error) {
@@ -344,7 +340,7 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
 
                                         const isMutualInProfile = item.fromUid && Array.isArray(profile?.guardCircle) && profile.guardCircle.includes(item.fromUid);
                                         const isCurrentlyAccepted = senderRecord && (senderRecord.status === 'accepted' || senderRecord.accepted === true);
-                                        const isConnected = item.accepted === true || isCurrentlyAccepted || isMutualInProfile || !!senderRecord;
+                                        const isConnected = (item.accepted === true || isCurrentlyAccepted || isMutualInProfile) && senderRecord?.status !== 'pending';
 
                                         return (
                                             <div className="mt-3 flex items-center gap-2 pt-2.5 border-t border-white/5">

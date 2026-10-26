@@ -198,6 +198,27 @@ function App() {
   }, [setUser, setProfile, clearUser]);
 
   useEffect(() => {
+    if (!user?.uid) return;
+    const unsubUser = onSnapshot(doc(db, 'users', user.uid), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        const current = useAuthStore.getState().profile;
+        if (current) {
+          useAuthStore.getState().setProfile({
+            ...current,
+            guardCircle: Array.isArray(data.guardCircle) ? data.guardCircle : (current.guardCircle || []),
+            name: data.name || current.name,
+            username: data.username || current.username,
+            avatarUrl: data.avatarUrl || current.avatarUrl,
+            phoneNumber: data.phoneNumber || current.phoneNumber,
+          });
+        }
+      }
+    });
+    return unsubUser;
+  }, [user?.uid]);
+
+  useEffect(() => {
     let unsubNotifs: () => void;
     let unsubCircle: () => void;
 
@@ -213,17 +234,11 @@ function App() {
           const targetUid = item.fromUid;
           if (targetUid && records[targetUid]) {
             const rec = records[targetUid];
-            if (!item.accepted) {
+            // ONLY if the connection was already explicitly accepted, keep notification in sync
+            if ((rec.status === 'accepted' || rec.accepted === true) && !item.accepted) {
               setDoc(doc(db, 'notifications', user.uid, 'items', item.id), {
                 accepted: true,
                 read: true
-              }, { merge: true }).catch(() => {});
-            }
-            if (rec.status !== 'accepted' || !rec.accepted) {
-              setDoc(doc(db, 'users', user.uid, 'guardCircleDetails', targetUid), {
-                status: 'accepted',
-                accepted: true,
-                connectedAt: new Date()
               }, { merge: true }).catch(() => {});
             }
           }

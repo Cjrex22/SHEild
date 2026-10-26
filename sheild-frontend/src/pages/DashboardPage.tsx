@@ -179,8 +179,27 @@ export default function DashboardPage() {
         }
     };
 
+    const [guardCircleCount, setGuardCircleCount] = useState(0);
+
+    useEffect(() => {
+        if (!profile?.uid) return;
+        const unsub = onSnapshot(collection(db, 'users', profile.uid, 'guardCircleDetails'), (snap) => {
+            const accepted = snap.docs.filter(d => {
+                const data = d.data();
+                return data.status === 'accepted' || data.accepted === true;
+            });
+            setGuardCircleCount(accepted.length);
+        });
+        return unsub;
+    }, [profile?.uid]);
+
     const shareLocation = async () => {
-        if (!profile?.guardCircle || profile.guardCircle.length === 0) {
+        const activeCircleCount = Math.max(
+            guardCircleCount, 
+            Array.isArray(profile?.guardCircle) ? profile.guardCircle.length : 0
+        );
+
+        if (activeCircleCount === 0) {
             toast.error('Add people to your Guard Circle first');
             return;
         }
@@ -225,7 +244,7 @@ export default function DashboardPage() {
                 lng: currentLng, 
                 locationName: currentLocationName 
             });
-            toast.success(`Live location sent to ${profile.guardCircle.length} contacts`, { icon: '📍' });
+            toast.success(`Live location sent to ${activeCircleCount} contacts`, { icon: '📍' });
         } catch (e) {
             toast.error('Failed to share location');
         } finally {

@@ -26,9 +26,14 @@ export default function CirclePage() {
     // Only members who have ACTUALLY accepted are in our active Guard Circle
     const connectedMembers = circleMembers.filter(member => {
         if (!member || !member.uid) return false;
+        // Pending members are NEVER connected until accepted!
+        if (member.status === 'pending' || member.accepted === false) return false;
+
         const liveInfo = liveUserData[member.uid];
-        const isMutualInBackend = Array.isArray(liveInfo?.guardCircle) && !!profile?.uid && liveInfo.guardCircle.includes(profile.uid);
+        // Mutual backend connection check: BOTH must have each other in guardCircle
+        const isMutualInBackend = Array.isArray(liveInfo?.guardCircle) && !!profile?.uid && liveInfo.guardCircle.includes(profile.uid) && Array.isArray(profile?.guardCircle) && profile.guardCircle.includes(member.uid);
         const hasAcceptedNotifFromMember = notifItems.some(item => 
+            item.accepted === true &&
             (item.type === 'circle_add' || item.type === 'circle' || (typeof item.message === 'string' && item.message.toLowerCase().includes('guard circle'))) &&
             ((item.fromUid && item.fromUid === member.uid) || 
              (typeof item.fromUsername === 'string' && typeof member.username === 'string' && item.fromUsername.toLowerCase() === member.username.toLowerCase()))
@@ -60,17 +65,12 @@ export default function CirclePage() {
         );
         if (isAlreadyConnected) return false;
 
-        // If this sender is already in my circle details (e.g. I already invited/added them), NEVER prompt me to accept!
-        const existingMember = circleMembers.find(m => 
+        // Don't prompt me to accept if I already sent them an outgoing pending invite
+        const isOutgoing = sentPendingInvites.some(m => 
             (item.fromUid && m.uid === item.fromUid) || 
             (typeof item.fromUsername === 'string' && typeof m.username === 'string' && m.username.toLowerCase() === item.fromUsername.toLowerCase())
         );
-        if (existingMember) return false;
-
-        // If this sender is in profile.guardCircle, NEVER prompt me to accept!
-        if (item.fromUid && Array.isArray(profile?.guardCircle) && profile.guardCircle.includes(item.fromUid)) {
-            return false;
-        }
+        if (isOutgoing) return false;
 
         return true;
     });
@@ -133,7 +133,7 @@ export default function CirclePage() {
 
     const handleAdd = async (targetUid: string, name: string) => {
         try {
-            await api.post(`/circle/${targetUid}`);
+            await api.post(`/circle/invite/${targetUid}`);
             if (profile?.uid) {
                 // Set my record as inviter and pending
                 await setDoc(doc(db, 'users', profile.uid, 'guardCircleDetails', targetUid), {
@@ -171,7 +171,7 @@ export default function CirclePage() {
                 return;
             }
 
-            await api.post(`/circle/${targetUid}`);
+            await api.post(`/circle/accept/${targetUid}`);
             const uid = profile?.uid;
             if (uid) {
                 // Set my circle details for inviter as accepted (role: invitee)
@@ -204,6 +204,13 @@ export default function CirclePage() {
                     accepted: true
                 }, { merge: true }).catch(() => {});
             }
+
+            const curProf = useAuthStore.getState().profile;
+            if (curProf) {
+                const updatedCircle = Array.from(new Set([...(curProf.guardCircle || []), targetUid]));
+                useAuthStore.getState().setProfile({ ...curProf, guardCircle: updatedCircle });
+            }
+
             markAsRead(invite.id);
             toast.success(`Connected with ${invite.fromName || 'guardian'}!`);
         } catch (e) {
@@ -226,6 +233,13 @@ export default function CirclePage() {
                     await api.delete(`/circle/${invite.fromUid}`).catch(() => {});
                 }
             }
+
+            const curProf = useAuthStore.getState().profile;
+            if (curProf && invite.fromUid) {
+                const updatedCircle = (curProf.guardCircle || []).filter(u => u !== invite.fromUid);
+                useAuthStore.getState().setProfile({ ...curProf, guardCircle: updatedCircle });
+            }
+
             markAsRead(invite.id);
             toast.success('Invitation declined');
         } catch (e) {
@@ -242,6 +256,13 @@ export default function CirclePage() {
                 await deleteDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid)).catch(() => {});
             }
             await api.delete(`/circle/${targetUid}`).catch(() => {});
+
+            const curProf = useAuthStore.getState().profile;
+            if (curProf) {
+                const updatedCircle = (curProf.guardCircle || []).filter(u => u !== targetUid);
+                useAuthStore.getState().setProfile({ ...curProf, guardCircle: updatedCircle });
+            }
+
             toast.success(`Invitation to ${name || 'user'} cancelled`);
             setActiveDropdown(null);
         } catch (e) {
@@ -258,6 +279,13 @@ export default function CirclePage() {
                 await deleteDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid)).catch(() => {});
             }
             await api.delete(`/circle/${targetUid}`).catch(() => {});
+
+            const curProf = useAuthStore.getState().profile;
+            if (curProf) {
+                const updatedCircle = (curProf.guardCircle || []).filter(u => u !== targetUid);
+                useAuthStore.getState().setProfile({ ...curProf, guardCircle: updatedCircle });
+            }
+
             toast.success(`${name || 'Guardian'} removed from your Guard Circle`);
             setActiveDropdown(null);
         } catch (e) {
