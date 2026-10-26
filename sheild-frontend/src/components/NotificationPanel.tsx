@@ -4,7 +4,7 @@ import { useNotificationStore, type NotificationItem } from '../stores/notificat
 import { useAuthStore } from '../stores/authStore';
 import { api } from '../lib/api';
 import { auth, db } from '../lib/firebase';
-import { doc, setDoc, collection, onSnapshot, deleteDoc, writeBatch } from 'firebase/firestore';
+import { doc, setDoc, collection, onSnapshot, deleteDoc, writeBatch, updateDoc, arrayUnion } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { formatLocationName } from '../lib/locationHelper';
 
@@ -73,11 +73,10 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                 return;
             }
 
-            await api.post(`/circle/accept/${targetUid}`);
             const uid = currentUid;
             const currentUser = profile || useAuthStore.getState().profile;
             if (uid) {
-                // Set my circle details for inviter as accepted (role: invitee)
+                // 1. Set my circle details for inviter as accepted (role: invitee)
                 await setDoc(doc(db, 'users', uid, 'guardCircleDetails', targetUid), {
                     uid: targetUid,
                     name: item.fromName || '',
@@ -89,7 +88,12 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                     connectedAt: new Date()
                 }, { merge: true }).catch(() => {});
 
-                // Also update the inviter's circle document for me as accepted (role: inviter)
+                // 2. Add targetUid to my guardCircle array
+                await updateDoc(doc(db, 'users', uid), {
+                    guardCircle: arrayUnion(targetUid)
+                }).catch(() => {});
+
+                // 3. Also update the inviter's circle document for me as accepted (role: inviter)
                 await setDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid), {
                     uid: uid,
                     name: currentUser?.name || '',
@@ -101,11 +105,25 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
                     connectedAt: new Date()
                 }, { merge: true }).catch(() => {});
 
-                // Mark current notification as accepted and read
+                // 4. Mark current notification as accepted and read
                 await setDoc(doc(db, 'notifications', uid, 'items', item.id), {
                     read: true,
                     accepted: true
                 }, { merge: true }).catch(() => {});
+
+                // 5. Send circle_accepted notification to inviter
+                const notifRef = doc(collection(db, 'notifications', targetUid, 'items'));
+                await setDoc(notifRef, {
+                    type: 'circle_accepted',
+                    fromUid: uid,
+                    fromName: currentUser?.name || currentUser?.username || 'Your Contact',
+                    fromUsername: currentUser?.username || '',
+                    fromAvatarUrl: currentUser?.avatarUrl || '',
+                    message: `${currentUser?.name || currentUser?.username || 'A contact'} accepted your Guard Circle invitation.`,
+                    read: false,
+                    accepted: true,
+                    createdAt: new Date()
+                }).catch(() => {});
             }
 
             const curProf = useAuthStore.getState().profile;
@@ -116,7 +134,13 @@ export default function NotificationPanel({ isOpen, onClose }: Props) {
 
             markAsRead(item.id);
             toast.success(`You and ${item.fromName || 'guardian'} are now connected!`);
+
+            // Backend sync to update mutual arrays & push notification (non-blocking)
+            api.post(`/circle/accept/${targetUid}`).catch(async () => {
+                await api.post(`/circle/${targetUid}`).catch(() => {});
+            });
         } catch (error) {
+            console.error('Accept invite error:', error);
             toast.error('Failed to accept invitation');
         }
     };

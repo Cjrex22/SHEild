@@ -64,9 +64,11 @@ public class GuardCircleController {
             detail.put("accepted", false);
             detail.put("addedAt", Timestamp.now());
             batch.set(firestore.collection("users").document(uid).collection("guardCircleDetails").document(targetUid), detail);
+            batch.update(firestore.collection("users").document(uid), "guardCircle", FieldValue.arrayRemove(targetUid));
 
             // Clean up any stale record on target user's side
             batch.delete(firestore.collection("users").document(targetUid).collection("guardCircleDetails").document(uid));
+            batch.update(firestore.collection("users").document(targetUid), "guardCircle", FieldValue.arrayRemove(uid));
 
             String senderName = meDoc.getString("name");
             String senderUsername = meDoc.getString("username") != null ? meDoc.getString("username") : "";

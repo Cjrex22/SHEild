@@ -8,7 +8,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useNotificationStore, type NotificationItem } from '../stores/notificationStore';
 import { api } from '../lib/api';
 import { db } from '../lib/firebase';
-import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
 export default function CirclePage() {
@@ -131,26 +131,71 @@ export default function CirclePage() {
         return () => clearTimeout(timer);
     }, [searchTerm]);
 
-    const handleAdd = async (targetUid: string, name: string) => {
+    const handleAdd = async (targetUid: string, name: string, targetUser?: any) => {
         try {
-            await api.post(`/circle/invite/${targetUid}`);
-            if (profile?.uid) {
-                // Set my record as inviter and pending
-                await setDoc(doc(db, 'users', profile.uid, 'guardCircleDetails', targetUid), {
-                    uid: targetUid,
-                    name: name,
-                    status: 'pending',
-                    role: 'inviter',
-                    accepted: false,
-                    addedAt: new Date()
-                }, { merge: true }).catch(() => {});
-
-                // Purge any stale document in target user's guardCircleDetails for me
-                await deleteDoc(doc(db, 'users', targetUid, 'guardCircleDetails', profile.uid)).catch(() => {});
+            const myUid = profile?.uid;
+            if (!myUid) {
+                toast.error('Please sign in to invite');
+                return;
             }
+
+            // 1. Immediately record pending invitation in my guardCircleDetails
+            await setDoc(doc(db, 'users', myUid, 'guardCircleDetails', targetUid), {
+                uid: targetUid,
+                name: name || targetUser?.name || targetUser?.username || 'Guardian',
+                username: targetUser?.username || '',
+                avatarUrl: targetUser?.avatarUrl || '',
+                avatarColor: targetUser?.avatarColor || '',
+                status: 'pending',
+                role: 'inviter',
+                accepted: false,
+                addedAt: new Date()
+            }, { merge: true });
+
+            // 2. Ensure target user is NOT in my guardCircle array yet
+            await updateDoc(doc(db, 'users', myUid), {
+                guardCircle: arrayRemove(targetUid)
+            }).catch(() => {});
+
+            // 3. Directly create notification in target user's notifications collection
+            const senderName = profile?.name || profile?.username || 'Your Contact';
+            const notifRef = doc(collection(db, 'notifications', targetUid, 'items'));
+            await setDoc(notifRef, {
+                type: 'circle_add',
+                fromUid: myUid,
+                fromName: senderName,
+                fromUsername: profile?.username || '',
+                fromAvatarUrl: profile?.avatarUrl || '',
+                message: `${senderName} invited you to their Guard Circle.`,
+                read: false,
+                accepted: false,
+                declined: false,
+                createdAt: new Date()
+            });
+
+            // 4. Clean up any stale record on target user's side
+            await deleteDoc(doc(db, 'users', targetUid, 'guardCircleDetails', myUid)).catch(() => {});
+
+            // Update local profile guardCircle in case it had targetUid
+            const curProf = useAuthStore.getState().profile;
+            if (curProf && Array.isArray(curProf.guardCircle)) {
+                useAuthStore.getState().setProfile({
+                    ...curProf,
+                    guardCircle: curProf.guardCircle.filter(u => u !== targetUid)
+                });
+            }
+
             toast.success(`Invitation sent to ${name}`);
             setSearchTerm('');
+
+            // 5. In background, inform backend to trigger push notification (non-blocking)
+            api.post(`/circle/invite/${targetUid}`).catch(async () => {
+                await api.post(`/circle/${targetUid}`).catch(err => {
+                    console.warn('Backend push notification trigger delayed:', err);
+                });
+            });
         } catch (e) {
+            console.error('Invite error:', e);
             toast.error('Failed to send invitation');
         }
     };
@@ -171,10 +216,9 @@ export default function CirclePage() {
                 return;
             }
 
-            await api.post(`/circle/accept/${targetUid}`);
             const uid = profile?.uid;
             if (uid) {
-                // Set my circle details for inviter as accepted (role: invitee)
+                // 1. Set my circle details for inviter as accepted (role: invitee)
                 await setDoc(doc(db, 'users', uid, 'guardCircleDetails', targetUid), {
                     uid: targetUid,
                     name: invite.fromName || '',
@@ -186,7 +230,12 @@ export default function CirclePage() {
                     connectedAt: new Date()
                 }, { merge: true }).catch(() => {});
 
-                // Update inviter's circle document for me as accepted as well (role: inviter)
+                // 2. Add to my guardCircle array
+                await updateDoc(doc(db, 'users', uid), {
+                    guardCircle: arrayUnion(targetUid)
+                }).catch(() => {});
+
+                // 3. Update inviter's circle document for me as accepted as well (role: inviter)
                 await setDoc(doc(db, 'users', targetUid, 'guardCircleDetails', uid), {
                     uid: uid,
                     name: profile?.name || '',
@@ -198,11 +247,25 @@ export default function CirclePage() {
                     connectedAt: new Date()
                 }, { merge: true }).catch(() => {});
 
-                // Mark current notification as accepted and read
+                // 4. Mark current notification as accepted and read
                 await setDoc(doc(db, 'notifications', uid, 'items', invite.id), {
                     read: true,
                     accepted: true
                 }, { merge: true }).catch(() => {});
+
+                // 5. Send circle_accepted notification to inviter
+                const notifRef = doc(collection(db, 'notifications', targetUid, 'items'));
+                await setDoc(notifRef, {
+                    type: 'circle_accepted',
+                    fromUid: uid,
+                    fromName: profile?.name || profile?.username || 'Your Contact',
+                    fromUsername: profile?.username || '',
+                    fromAvatarUrl: profile?.avatarUrl || '',
+                    message: `${profile?.name || profile?.username || 'A contact'} accepted your Guard Circle invitation.`,
+                    read: false,
+                    accepted: true,
+                    createdAt: new Date()
+                }).catch(() => {});
             }
 
             const curProf = useAuthStore.getState().profile;
@@ -213,7 +276,13 @@ export default function CirclePage() {
 
             markAsRead(invite.id);
             toast.success(`Connected with ${invite.fromName || 'guardian'}!`);
+
+            // Backend sync to update mutual arrays & push notification (non-blocking)
+            api.post(`/circle/accept/${targetUid}`).catch(async () => {
+                await api.post(`/circle/${targetUid}`).catch(() => {});
+            });
         } catch (e) {
+            console.error('Accept invite error:', e);
             toast.error('Failed to accept invitation');
         }
     };
@@ -362,7 +431,7 @@ export default function CirclePage() {
                                                     <Clock size={13} /> Invite Sent
                                                 </span>
                                             ) : (
-                                                <button onClick={() => handleAdd(user.uid, user.name)} className="px-3.5 h-8 rounded-full bg-primary text-white text-xs font-bold hover:bg-primary-hover active:scale-95 transition-all shadow-sos">
+                                                <button onClick={() => handleAdd(user.uid, user.name || user.username || 'Guardian', user)} className="px-3.5 h-8 rounded-full bg-primary text-white text-xs font-bold hover:bg-primary-hover active:scale-95 transition-all shadow-sos">
                                                     + Invite
                                                 </button>
                                             )}

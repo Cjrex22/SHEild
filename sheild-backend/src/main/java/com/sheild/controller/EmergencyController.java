@@ -101,7 +101,7 @@ public class EmergencyController {
             for (var d : details.getDocuments()) {
                 String status = d.getString("status");
                 Boolean accepted = d.getBoolean("accepted");
-                if ("accepted".equalsIgnoreCase(status) || Boolean.TRUE.equals(accepted)) {
+                if (!"pending".equalsIgnoreCase(status) && !Boolean.FALSE.equals(accepted) && !d.getId().equals(uid)) {
                     circle.add(d.getId());
                 }
             }

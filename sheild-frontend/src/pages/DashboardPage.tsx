@@ -8,7 +8,7 @@ import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 
 import { db } from '../lib/firebase';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, setDoc } from 'firebase/firestore';
 import NotificationPanel from '../components/NotificationPanel';
 import QuickDialModal from '../components/QuickDialModal';
 import { registerFcmToken, setupForegroundNotifications } from '../lib/fcm';
@@ -179,27 +179,40 @@ export default function DashboardPage() {
         }
     };
 
-    const [guardCircleCount, setGuardCircleCount] = useState(0);
+    const [circleUids, setCircleUids] = useState<string[]>([]);
 
     useEffect(() => {
         if (!profile?.uid) return;
-        const unsub = onSnapshot(collection(db, 'users', profile.uid, 'guardCircleDetails'), (snap) => {
-            const accepted = snap.docs.filter(d => {
-                const data = d.data();
-                return data.status === 'accepted' || data.accepted === true;
-            });
-            setGuardCircleCount(accepted.length);
+        const unsubDetails = onSnapshot(collection(db, 'users', profile.uid, 'guardCircleDetails'), (snap) => {
+            const acceptedUids = snap.docs
+                .filter(d => {
+                    const data = d.data();
+                    return data.status !== 'pending' && data.accepted !== false && d.id !== profile.uid;
+                })
+                .map(d => d.id);
+            setCircleUids(prev => Array.from(new Set([...prev, ...acceptedUids])));
         });
-        return unsub;
+
+        const unsubUser = onSnapshot(doc(db, 'users', profile.uid), (snap) => {
+            if (snap.exists()) {
+                const data = snap.data();
+                if (Array.isArray(data.guardCircle)) {
+                    setCircleUids(prev => Array.from(new Set([...prev, ...data.guardCircle])));
+                }
+            }
+        });
+
+        return () => {
+            unsubDetails();
+            unsubUser();
+        };
     }, [profile?.uid]);
 
     const shareLocation = async () => {
-        const activeCircleCount = Math.max(
-            guardCircleCount, 
-            Array.isArray(profile?.guardCircle) ? profile.guardCircle.length : 0
-        );
+        const profileCircle = Array.isArray(profile?.guardCircle) ? profile.guardCircle : [];
+        const allTargetUids = Array.from(new Set([...circleUids, ...profileCircle])).filter(Boolean);
 
-        if (activeCircleCount === 0) {
+        if (allTargetUids.length === 0) {
             toast.error('Add people to your Guard Circle first');
             return;
         }
@@ -239,13 +252,41 @@ export default function DashboardPage() {
                 return;
             }
 
-            await api.post('/emergency/share-location', { 
+            // 1. Direct Firestore write to each guardian's notifications collection
+            // Guaranteeing instant delivery even if backend has latency or cold-start
+            const mapsLink = `https://www.google.com/maps?q=${currentLat},${currentLng}`;
+            const senderName = profile?.name || profile?.username || 'Your Contact';
+            
+            allTargetUids.forEach(targetUid => {
+                const notifRef = doc(collection(db, 'notifications', targetUid, 'items'));
+                setDoc(notifRef, {
+                    type: 'location',
+                    fromUid: profile.uid,
+                    fromName: senderName,
+                    fromUsername: profile?.username || '',
+                    fromAvatarUrl: profile?.avatarUrl || '',
+                    message: `${senderName} shared live location with you. Tap to view on Google Maps.`,
+                    lat: currentLat,
+                    lng: currentLng,
+                    mapsLink: mapsLink,
+                    locationName: currentLocationName,
+                    read: false,
+                    createdAt: new Date()
+                }).catch(() => {});
+            });
+
+            // 2. Call backend to trigger FCM web push notifications
+            api.post('/emergency/share-location', { 
                 lat: currentLat, 
                 lng: currentLng, 
                 locationName: currentLocationName 
+            }).catch(err => {
+                console.warn('Backend FCM push delayed:', err);
             });
-            toast.success(`Live location sent to ${activeCircleCount} contacts`, { icon: '📍' });
+
+            toast.success(`Live location sent to ${allTargetUids.length} contacts`, { icon: '📍' });
         } catch (e) {
+            console.error('Error sharing location:', e);
             toast.error('Failed to share location');
         } finally {
             setIsLocationLoading(false);
