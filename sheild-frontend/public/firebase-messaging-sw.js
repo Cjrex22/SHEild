@@ -10,6 +10,14 @@ firebase.initializeApp({
   appId: "1:296306996390:web:ca1b7c1141a1cd0f447067"
 });
 
+self.addEventListener('install', () => {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
@@ -19,10 +27,11 @@ messaging.onBackgroundMessage((payload) => {
   // Create stylized, high-contrast title & body for the service worker alert
   const { title, body } = getFormattedNotification(type, fromName, payload);
 
+  const baseUrl = self.location.origin;
   const notifOptions = {
     body: body,
-    icon: '/shield-logo.png',
-    badge: '/shield-badge.png',
+    icon: baseUrl + '/shield-logo.png',
+    badge: baseUrl + '/shield-badge.png',
     vibrate: type === 'sos' ? [400, 150, 400, 150, 400] : [200, 100, 200],
     data: {
       type: type,

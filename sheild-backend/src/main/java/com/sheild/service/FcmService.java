@@ -37,13 +37,16 @@ public class FcmService {
                 .putHeader("Urgency", isSos ? "high" : "normal")
                 .build();
 
+            Map<String, String> payloadData = new java.util.HashMap<>(data != null ? data : Map.of());
+            payloadData.put("icon", SHIELD_ICON_URL);
+            payloadData.put("badge", SHIELD_BADGE_URL);
+
             MulticastMessage message = MulticastMessage.builder()
                 .addAllTokens(tokens)
-                .putAllData(data)
+                .putAllData(payloadData)
                 .setNotification(com.google.firebase.messaging.Notification.builder()
                     .setTitle(title)
                     .setBody(body)
-                    .setImage(SHIELD_ICON_URL)
                     .build())
                 .setAndroidConfig(AndroidConfig.builder()
                     .setPriority(isSos ?
