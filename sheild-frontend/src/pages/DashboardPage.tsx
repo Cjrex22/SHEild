@@ -366,7 +366,7 @@ export default function DashboardPage() {
 
                 <div className="grid grid-cols-2 gap-4">
                     <button onClick={toggleBodyguard} disabled={isBodyguardLoading} className={`h-14 rounded-xl flex items-center justify-center gap-2 font-medium transition-all ${isBodyguardLoading ? 'opacity-70' : ''} ${bodyguardActive ? 'bg-gradient-to-r from-warning to-orange-500 shadow-[0_0_20px_var(--c-warning-glow)] text-white' : 'bg-surface-2 border border-border text-white hover:bg-surface-3'}`}>
-                        {isBodyguardLoading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Shield size={20} />} Bodyguard {bodyguardActive ? 'ON' : 'OFF'}
+                        {isBodyguardLoading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Shield size={20} />} Bodyguard{bodyguardActive ? ' ON' : ''}
                     </button>
                     <button onClick={handleSafe} disabled={isSafeLoading} className={`h-14 rounded-xl bg-safe text-white flex items-center justify-center gap-2 font-medium shadow-safe active:scale-95 transition-transform hover:opacity-90 ${isSafeLoading ? 'opacity-70' : ''}`}>
                          {isSafeLoading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <ShieldCheck size={20} />} I'm Safe
