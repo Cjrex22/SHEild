@@ -5,6 +5,7 @@ import com.google.firebase.messaging.BatchResponse;
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.MulticastMessage;
 import com.google.firebase.messaging.WebpushConfig;
+import com.google.firebase.messaging.WebpushFcmOptions;
 import com.google.firebase.messaging.WebpushNotification;
 import org.springframework.stereotype.Service;
 
@@ -23,19 +24,27 @@ public class FcmService {
         
         try {
             boolean isSos = "sos".equalsIgnoreCase(type);
+            boolean isLocation = "location".equalsIgnoreCase(type);
 
-            WebpushNotification webpushNotif = WebpushNotification.builder()
+            WebpushNotification.Builder webpushNotifBuilder = WebpushNotification.builder()
                 .setTitle(title)
                 .setBody(body)
                 .setIcon(SHIELD_ICON_URL)
                 .setBadge(SHIELD_BADGE_URL)
-                .setRequireInteraction(isSos)
-                .build();
+                .setRequireInteraction(isSos);
 
-            WebpushConfig webpushConfig = WebpushConfig.builder()
-                .setNotification(webpushNotif)
-                .putHeader("Urgency", isSos ? "high" : "normal")
-                .build();
+            if (isLocation) {
+                webpushNotifBuilder.addAction(new WebpushNotification.Action("open_google_maps", "🗺️ View on Google Maps"));
+            }
+
+            WebpushConfig.Builder webpushConfigBuilder = WebpushConfig.builder()
+                .setNotification(webpushNotifBuilder.build())
+                .putHeader("Urgency", isSos ? "high" : "normal");
+
+            String mapsLink = data != null ? data.get("mapsLink") : null;
+            if (mapsLink != null && !mapsLink.isEmpty()) {
+                webpushConfigBuilder.setFcmOptions(WebpushFcmOptions.builder().setLink(mapsLink).build());
+            }
 
             Map<String, String> payloadData = new java.util.HashMap<>(data != null ? data : Map.of());
             payloadData.put("icon", SHIELD_ICON_URL);
@@ -52,7 +61,7 @@ public class FcmService {
                     .setPriority(isSos ?
                         AndroidConfig.Priority.HIGH : AndroidConfig.Priority.NORMAL)
                     .build())
-                .setWebpushConfig(webpushConfig)
+                .setWebpushConfig(webpushConfigBuilder.build())
                 .build();
 
             BatchResponse response = FirebaseMessaging.getInstance()

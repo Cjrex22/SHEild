@@ -93,26 +93,29 @@ public class EmergencyController {
         
         if (circle == null || circle.isEmpty()) return;
         
-        String name = meDoc.getString("name");
+        String rawName = meDoc.getString("name");
+        String rawUsername = meDoc.getString("username");
+        String senderName = (rawName != null && !rawName.trim().isEmpty()) ? rawName.trim() : 
+                           ((rawUsername != null && !rawUsername.trim().isEmpty()) ? rawUsername.trim() : "Your Contact");
         String message;
         String title;
         
         switch(type) {
             case "sos": 
-                message = "🚨 SOS Triggered! " + name + " is in danger.";
-                title = "🚨 EMERGENCY: " + name;
+                message = "🚨 SOS Triggered! " + senderName + " is in danger.";
+                title = "🚨 EMERGENCY: " + senderName;
                 break;
             case "bodyguard":
-                message = name + " might be in danger. Stay alert.";
-                title = "🛡️ Safety Alert: " + name;
+                message = senderName + " might be in danger. Stay alert.";
+                title = "🛡️ Safety Alert: " + senderName;
                 break;
             case "safe":
-                message = name + " is now safe and secure.";
-                title = name + " is Safe ✅";
+                message = senderName + " is now safe and secure.";
+                title = senderName + " is Safe ✅";
                 break;
             case "location":
-                message = name + " shared live location with you.";
-                title = "📍 Location Shared by " + name;
+                message = senderName + " shared live location with you. Tap to view on Google Maps.";
+                title = "📍 Live Location • " + senderName;
                 break;
             default: return;
         }
@@ -120,25 +123,31 @@ public class EmergencyController {
         WriteBatch batch = firestore.batch();
         List<String> tokens = new ArrayList<>();
         
+        String latStr = (location != null && location.get("lat") != null) ? String.valueOf(location.get("lat")) : null;
+        String lngStr = (location != null && location.get("lng") != null) ? String.valueOf(location.get("lng")) : null;
+        String mapsLink = (latStr != null && lngStr != null) ? "https://www.google.com/maps?q=" + latStr + "," + lngStr : null;
+
         try {
             for (String targetUid : circle) {
                 Map<String, Object> notif = new HashMap<>();
                 notif.put("type", type);
                 notif.put("fromUid", uid);
-                notif.put("fromName", meDoc.getString("name"));
+                notif.put("fromName", senderName);
                 notif.put("fromUsername", meDoc.getString("username"));
                 notif.put("fromAvatarUrl", meDoc.getString("avatarUrl"));
                 notif.put("message", message);
                 notif.put("read", false);
-                notif.put("notifiedAt", Timestamp.now()); // use notifiedAt to avoid confusion with createdAt
+                notif.put("notifiedAt", Timestamp.now());
                 notif.put("createdAt", Timestamp.now());
                 
-                if (location.get("lat") != null && location.get("lng") != null) {
+                if (latStr != null && lngStr != null) {
                     notif.put("lat", location.get("lat"));
                     notif.put("lng", location.get("lng"));
-                    notif.put("mapsLink", "https://maps.google.com/?q=" + location.get("lat") + "," + location.get("lng"));
+                    notif.put("mapsLink", mapsLink);
                 }
-                if (location.get("locationName") != null) notif.put("locationName", location.get("locationName"));
+                if (location != null && location.get("locationName") != null) {
+                    notif.put("locationName", location.get("locationName"));
+                }
                 
                 batch.set(firestore.collection("notifications").document(targetUid).collection("items").document(), notif);
                 
@@ -151,17 +160,27 @@ public class EmergencyController {
             
             batch.commit().get();
         } catch (Exception e) {
-             // In private helper, we might just let it bubble or log, but prompt says "In every Firestore operation... wrap in try catch"
              throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "Database temporarily unavailable. Please try again.");
         }
         
         Map<String, String> data = new HashMap<>();
         data.put("type", type);
         data.put("fromUid", uid);
-        data.put("fromName", name != null ? name : "");
+        data.put("fromName", senderName);
+        data.put("name", senderName);
+        data.put("senderName", senderName);
         data.put("title", title);
         data.put("body", message);
         if (sessionId != null) data.put("sessionId", sessionId);
+        if (mapsLink != null) {
+            data.put("lat", latStr);
+            data.put("lng", lngStr);
+            data.put("mapsLink", mapsLink);
+            data.put("url", mapsLink);
+        }
+        if (location != null && location.get("locationName") != null) {
+            data.put("locationName", String.valueOf(location.get("locationName")));
+        }
         
         fcmService.sendToTokens(tokens, type, title, message, data);
     }

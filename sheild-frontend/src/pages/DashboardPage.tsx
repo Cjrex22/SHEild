@@ -186,8 +186,46 @@ export default function DashboardPage() {
         }
         setIsLocationLoading(true);
         try {
-            await api.post('/emergency/share-location', { lat: coords.lat, lng: coords.lng, locationName });
-            toast.success(`Location sent to ${profile.guardCircle.length} contacts`);
+            let currentLat = coords.lat;
+            let currentLng = coords.lng;
+            let currentLocationName = locationName;
+
+            // Fetch fresh high-accuracy position immediately
+            if ("geolocation" in navigator) {
+                try {
+                    const pos: GeolocationPosition = await new Promise((resolve, reject) => {
+                        navigator.geolocation.getCurrentPosition(resolve, reject, {
+                            enableHighAccuracy: true,
+                            timeout: 8000,
+                            maximumAge: 5000
+                        });
+                    });
+                    currentLat = pos.coords.latitude;
+                    currentLng = pos.coords.longitude;
+                    setCoords({ lat: currentLat, lng: currentLng });
+                    try {
+                        const res = await api.get(`/geocode/reverse?lat=${currentLat}&lng=${currentLng}`);
+                        currentLocationName = formatLocationName(res?.locationName, currentLat, currentLng);
+                        setLocationName(currentLocationName);
+                    } catch {
+                        currentLocationName = formatLocationName(null, currentLat, currentLng);
+                    }
+                } catch {
+                    // Cached coordinates will be used
+                }
+            }
+
+            if (!currentLat && !currentLng) {
+                toast.error('Unable to access your current GPS location. Please allow location permissions.');
+                return;
+            }
+
+            await api.post('/emergency/share-location', { 
+                lat: currentLat, 
+                lng: currentLng, 
+                locationName: currentLocationName 
+            });
+            toast.success(`Live location sent to ${profile.guardCircle.length} contacts`, { icon: '📍' });
         } catch (e) {
             toast.error('Failed to share location');
         } finally {

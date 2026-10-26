@@ -90,7 +90,11 @@ public class GuardCircleController {
                 data.put("type", "circle_add");
                 data.put("fromUid", uid);
                 data.put("fromName", senderName != null ? senderName : "");
+                data.put("name", senderName != null ? senderName : "");
+                data.put("senderName", senderName != null ? senderName : "");
                 data.put("fromUsername", senderUsername);
+                data.put("title", pushTitle);
+                data.put("body", notifMessage);
                 List<String> tokens = new ArrayList<>();
                 tokens.add(fcmToken);
                 fcmService.sendToTokens(tokens, "circle_add", pushTitle, notifMessage, data);
