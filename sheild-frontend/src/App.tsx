@@ -13,6 +13,7 @@ import { useSosStore } from './stores/sosStore';
 import { useShakeDetection } from './hooks/useShakeDetection';
 import ShakeSOSOverlay from './components/ShakeSOSOverlay';
 import { formatLocationName } from './lib/locationHelper';
+import { resetFcmRegistration } from './lib/fcm';
 
 import WelcomePage from './pages/auth/WelcomePage';
 import SignUpPage from './pages/auth/SignUpPage';
@@ -141,6 +142,7 @@ function App() {
         }
       } else {
         clearUser();
+        resetFcmRegistration(); // Allow re-registration for next user
       }
     });
     return unsub;

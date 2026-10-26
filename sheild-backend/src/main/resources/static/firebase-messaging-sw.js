@@ -13,29 +13,69 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
-  const title = payload.notification?.title || 'SHEild Alert';
-  const body = payload.notification?.body || 'You have a new safety alert.';
+  const type = payload.data?.type || '';
+  const title = payload.notification?.title || getTitleByType(type);
+  const body = payload.notification?.body || payload.data?.body || 'You have a new notification.';
 
-  self.registration.showNotification(title, {
+  // Determine icon and badge based on type
+  let icon = '/sheild-pwa-192.png';
+  let badge = '/sheild-pwa-192.png';
+
+  const notifOptions = {
     body: body,
-    icon: '/sheild-pwa-192.png',
-    badge: '/sheild-pwa-192.png',
-    vibrate: [200, 100, 200],
-    data: payload.data || {},
-    requireInteraction: payload.data?.type === 'sos'
-  });
+    icon: icon,
+    badge: badge,
+    vibrate: type === 'sos' ? [300, 100, 300, 100, 300] : [200, 100, 200],
+    data: {
+      type: type,
+      url: getUrlByType(type),
+      ...(payload.data || {})
+    },
+    requireInteraction: type === 'sos',
+    tag: type === 'sos' ? 'sos-alert' : undefined,
+    renotify: type === 'sos'
+  };
+
+  self.registration.showNotification(title, notifOptions);
 });
+
+function getTitleByType(type) {
+  switch (type) {
+    case 'sos': return '🚨 EMERGENCY ALERT';
+    case 'safe': return '✅ Safety Update';
+    case 'circle_add': return '👥 Guard Circle Invite';
+    case 'location': return '📍 Location Shared';
+    case 'bodyguard': return '🛡️ Safety Alert';
+    default: return '🛡️ SHEild Alert';
+  }
+}
+
+function getUrlByType(type) {
+  switch (type) {
+    case 'circle_add': return '/circle';
+    case 'location': return '/map';
+    default: return '/dashboard';
+  }
+}
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) ? event.notification.data.url : '/dashboard';
+
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // Try to find an already-open window and navigate it
       for (const client of clientList) {
-        if (client.url.includes('/dashboard') && 'focus' in client) {
-          return client.focus();
+        if ('focus' in client) {
+          client.focus();
+          if ('navigate' in client) {
+            return client.navigate(targetUrl);
+          }
+          return;
         }
       }
-      return clients.openWindow('/dashboard');
+      // No window open — open a new one
+      return clients.openWindow(targetUrl);
     })
   );
 });

@@ -77,7 +77,7 @@ export default function DashboardPage() {
 
     useEffect(() => {
         if (!profile?.uid) return;
-        registerFcmToken();
+        registerFcmToken(profile.uid);
         setupForegroundNotifications();
     }, [profile?.uid]);
 
